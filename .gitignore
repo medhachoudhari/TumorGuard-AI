@@ -1,0 +1,21 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+node_modules/
+dist/
+.env
+*.log
+
+# Large datasets
+BraTS2020_TrainingData/
+BraTS2020_ValidationData/
+datasets/
+
+# Generated outputs
+outputs/
+
+# Model files - keep local for now
+*.pt
+*.pth
+*.ckpt

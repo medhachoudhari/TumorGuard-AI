@@ -1,0 +1,17 @@
+{
+    "model": "tumorguard_model.pt",
+    "checkpoint_epoch": 20,
+    "checkpoint_validation_loss": 0.34750224873423574,
+    "validation_samples": 398,
+    "mean_dice": 0.7863156015536554,
+    "median_dice": 0.8761556148529053,
+    "min_dice": 1.3513513863472326e-08,
+    "max_dice": 1.0,
+    "mean_iou": 0.6961169813451865,
+    "mean_precision": 0.836374887998356,
+    "mean_recall": 0.8145618991278899,
+    "zero_prediction_slices": 19,
+    "average_predicted_tumor_pixels": 373.0326633165829,
+    "average_actual_tumor_pixels": 385.83668341708545,
+    "device": "cpu"
+}
