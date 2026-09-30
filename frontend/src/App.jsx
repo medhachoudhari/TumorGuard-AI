@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Brain, Scissors, Dices, Layers, ShieldCheck } from 'lucide-react';
 import './App.css';
 
-const BACKEND = 'http://localhost:5000';
+const BACKEND = 'http://127.0.0.1:5000';
 
 const MODALITIES = [
   { key: 'flair', label: 'FLAIR', desc: 'Fluid Attenuated Inversion Recovery' },

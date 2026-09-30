@@ -21,7 +21,7 @@ from flask_cors import CORS
 import tumorguard_core
 
 app = Flask(__name__)
-CORS(app, origins=["http://localhost:3000"])
+CORS(app)
 
 # ==============================================================================
 # STARTUP INITIALIZATION
