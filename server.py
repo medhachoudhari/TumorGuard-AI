@@ -13,6 +13,7 @@ import hashlib
 import logging
 import torch
 import numpy as np
+import math
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
@@ -247,7 +248,15 @@ def predict():
                 mask_pixels=mc_tumor_pixels, reliability_score=reliability_score, verdict=verdict,
                 provenance=MODEL_PROVENANCE)
 
-            # 9. JSON response (all original and Phase 2B fields preserved)
+            def safe_num(v):
+                if v is None:
+                    return None
+                try:
+                    f = float(v)
+                    return f if math.isfinite(f) else None
+                except (TypeError, ValueError):
+                    return None
+
             response = {
                 "status": "success",
                 "slice_index": int(best_slice),
@@ -262,10 +271,10 @@ def predict():
                     "threshold": SEGMENTATION_THRESHOLD,
                     "method": "single_pass_eval"
                 },
-                "familiarity_score": float(familiarity),
-                "uncertainty_score": float(unc_score),
-                "predictive_entropy": float(entropy),
-                "max_probability_difference": float(max_diff),
+                "familiarity_score": safe_num(familiarity),
+                "uncertainty_score": safe_num(unc_score),
+                "predictive_entropy": safe_num(entropy),
+                "max_probability_difference": safe_num(max_diff),
                 "reliability_score": float(reliability_score),
                 "verdict": verdict,
                 "images": {

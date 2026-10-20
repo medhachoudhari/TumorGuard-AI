@@ -536,8 +536,14 @@ def calculate_similarity_score(input_tensor, training_stats):
         Higher = more similar to training distribution.
         Returns 0.5 as a neutral fallback if the reference is missing.
     """
+    if training_stats is None or not isinstance(training_stats, dict):
+        import warnings as _w
+        _w.warn("familiarity_reference missing from training_stats.json. "
+                "Re-run train.py to rebuild. Returning 0.5 as fallback.")
+        return 0.5
+
     ref = training_stats.get("familiarity_reference")
-    if ref is None:
+    if ref is None or not isinstance(ref, dict) or "mean" not in ref or "std" not in ref:
         # Reference was not yet built; return a neutral mid-point so downstream
         # code doesn't break, but flag the issue clearly.
         import warnings as _w
