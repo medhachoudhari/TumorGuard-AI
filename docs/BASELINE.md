@@ -52,16 +52,24 @@ The checkpoint does not store patient IDs. `train_samples=1200` and `val_samples
 
 ## 5. Environment used for the checks in this document
 
-Linux container (4 CPU, 15 GB RAM, no GPU), Python 3.13.16, torch 2.14.1 (CPU), numpy 2.5.4, nibabel 5.4.2, scikit-image 0.26.0, Flask 3.1.3, pytest 9.1.1, Node 22.22.0 / npm 10.9.4. This is **not** the environment of the historical evaluation.
+Linux container (4 CPU, 15 GB RAM, no GPU), Python 3.13.16, torch 2.14.1 (`+cu130` build, run on CPU), numpy 2.5.4, nibabel 5.4.2, scikit-image 0.26.0, scipy 1.18.1, matplotlib 3.11.2, Flask 3.1.3, flask-cors 6.0.5, pytest 9.1.1, Node 22.22.0 / npm 10.9.4. This is **not** the environment of the historical evaluation.
 
 ## 6. Commands run (and results)
 
 See `docs/PHASE1_AUDIT.md`, section "Verification actually performed".
 
-## 7. How to reproduce the baseline (to be executed where data exists)
+## 7. Command to reproduce the baseline (run on the Windows machine that has the cached tensors; NOT yet run)
 
-1. Check out the recorded commit; create a clean venv; `pip install -r requirements.txt`; record `pip freeze`.
-2. Confirm the checkpoint SHA-256 above.
-3. Rebuild cached tensors with `prepare_dataset_fast.py` (BraTS2020 patients 001-040) or obtain the original cache.
-4. Run `evaluate_phase9.py`. **Before running**, change its output path or copy `models/phase9_evaluation.json` aside so the historical file is not overwritten.
-5. Record commit, versions, device, date, command and the new output file here.
+`evaluate_phase9.py` no longer overwrites `models/phase9_evaluation.json`; it writes `outputs/evaluations/phase9_<UTC>.json` and records the checkpoint SHA-256 and library versions.
+
+```
+cd "C:\Medha\TumorGuard AI"
+git rev-parse HEAD
+Get-FileHash models\tumorguard_model.pt -Algorithm SHA256    # expect eb50ced6...c636fe
+python -c "import sys, torch; print(sys.version, torch.__version__)"
+python evaluate_phase9.py
+```
+
+Requirements for a valid reproduction: `datasets\val_x.pt` and `val_y.pt` must be the original 398-slice validation cache (patients 031-040). Compare the new JSON with section 1; record commit, versions, device, date, command and output path here. A match shows the pipeline reproduces the historical numbers on the same cache; it does not make 031-040 an independent test set.
+
+If the cache must be rebuilt, run `prepare_dataset_fast.py` (BraTS2020 patients 001-040) and note that the regenerated cache may differ from the original.

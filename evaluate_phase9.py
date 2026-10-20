@@ -10,8 +10,10 @@ import tumorguard_core
 # CONFIG
 # ============================================================
 
-DATASET_DIR = r"C:\Medha\TumorGuard AI\datasets"
-MODELS_DIR = r"C:\Medha\TumorGuard AI\models"
+# Paths default to the original Windows layout; override with environment
+# variables to run elsewhere.
+DATASET_DIR = os.environ.get("TUMORGUARD_DATASET_DIR", r"C:\Medha\TumorGuard AI\datasets")
+MODELS_DIR = os.environ.get("TUMORGUARD_MODELS_DIR", r"C:\Medha\TumorGuard AI\models")
 
 MODEL_PATH = os.path.join(MODELS_DIR, "tumorguard_model.pt")
 TRAINING_HISTORY = os.path.join(MODELS_DIR, "training_history.json")
@@ -116,6 +118,13 @@ val_loader = DataLoader(
 # ============================================================
 # LOAD TRAINED MODEL
 # ============================================================
+
+import hashlib
+import datetime
+
+RUN_UTC = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+with open(MODEL_PATH, "rb") as _f:
+    CHECKPOINT_SHA256 = hashlib.sha256(_f.read()).hexdigest()
 
 print("Loading trained TumorGuard U-Net...")
 
@@ -298,10 +307,20 @@ results = {
     "device": str(DEVICE)
 }
 
-results_path = os.path.join(
-    MODELS_DIR,
-    "phase9_evaluation.json"
+# Never overwrite the historical models/phase9_evaluation.json: write each run
+# to its own file (override with TUMORGUARD_EVAL_OUTPUT).
+results["run_utc"] = RUN_UTC
+results["checkpoint_sha256"] = CHECKPOINT_SHA256
+results["torch_version"] = torch.__version__
+results["numpy_version"] = np.__version__
+
+results_path = os.environ.get("TUMORGUARD_EVAL_OUTPUT") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "outputs", "evaluations", f"phase9_{RUN_UTC}.json"
 )
+if os.path.exists(results_path):
+    raise FileExistsError(f"Refusing to overwrite existing evaluation result: {results_path}")
+os.makedirs(os.path.dirname(results_path), exist_ok=True)
 
 with open(results_path, "w") as f:
     json.dump(results, f, indent=4)
