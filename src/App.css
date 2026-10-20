@@ -44,7 +44,7 @@ body {
   background-image: url('/brain-bg.png');
   background-size: cover;
   background-position: center;
-  overflow: hidden;
+  overflow-x: hidden;
 }
 
 .upload-page::before {
@@ -145,7 +145,7 @@ body {
   justify-content: center;
   padding: 1.5rem 1.5rem 3.5rem;
   text-align: center;
-  gap: 0; /* control spacing individually */
+  gap: 0;
 }
 
 .hero-title {
@@ -160,22 +160,127 @@ body {
 .hero-sub {
   font-size: 0.95rem;
   color: rgba(255,255,255,0.48);
-  max-width: 400px;
+  max-width: 480px;
   line-height: 1.65;
-  margin: 0 0 2.25rem;
+  margin: 0 0 2rem;
   font-weight: 400;
+}
+
+/* Sample cases selector */
+.sample-presets-box {
+  width: 100%;
+  max-width: 760px;
+  margin-bottom: 1.25rem;
+  text-align: left;
+}
+
+.presets-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.6rem;
+  padding: 0 0.25rem;
+}
+
+.presets-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--cyan);
+}
+
+.presets-hint {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.sample-cards-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.85rem;
+}
+
+@media (max-width: 700px) {
+  .sample-cards-row { grid-template-columns: 1fr; }
+}
+
+.sample-card {
+  background: rgba(13, 22, 41, 0.7);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.sample-card:hover {
+  background: rgba(34, 211, 238, 0.08);
+  border-color: rgba(34, 211, 238, 0.4);
+  transform: translateY(-1px);
+}
+
+.sample-card.active {
+  border-color: var(--cyan);
+  background: rgba(34, 211, 238, 0.12);
+  box-shadow: 0 0 16px rgba(34, 211, 238, 0.15);
+}
+
+.sample-card-title {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--white);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.sample-badge {
+  font-size: 0.62rem;
+  padding: 0.15rem 0.45rem;
+  border-radius: 999px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.badge-safe {
+  background: rgba(16, 185, 129, 0.18);
+  color: var(--emerald);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+}
+
+.badge-attention {
+  background: rgba(245, 158, 11, 0.18);
+  color: var(--amber);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+
+.badge-manual {
+  background: rgba(239, 68, 68, 0.18);
+  color: var(--red);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.sample-card-desc {
+  font-size: 0.7rem;
+  color: var(--muted);
+  line-height: 1.35;
 }
 
 /* Glass upload panel */
 .upload-panel {
   width: 100%;
-  max-width: 720px;
-  background: rgba(8, 14, 36, 0.72);
+  max-width: 760px;
+  background: rgba(8, 14, 36, 0.76);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
   border: 1px solid rgba(255,255,255,0.1);
   border-radius: 16px;
-  padding: 2rem 2.25rem 1.75rem;
+  padding: 1.85rem 2rem 1.6rem;
   box-shadow: 0 12px 48px rgba(0,0,0,0.55);
 }
 
@@ -291,7 +396,7 @@ body {
 .upload-hint {
   margin-top: 0.85rem;
   font-size: 0.72rem;
-  color: rgba(255,255,255,0.28);
+  color: rgba(255,255,255,0.38);
   letter-spacing: 0.04em;
   text-align: center;
 }
@@ -335,7 +440,7 @@ body {
 }
 
 .loading-label {
-  font-size: 1rem;
+  font-size: 1.05rem;
   font-weight: 600;
   color: var(--white);
 }
@@ -356,7 +461,6 @@ body {
   overflow-x: hidden;
 }
 
-/* Very subtle neural layer on results page */
 .results-page::before {
   content: '';
   position: fixed;
@@ -370,7 +474,6 @@ body {
   pointer-events: none;
 }
 
-/* Subtle cyan glow top-right */
 .results-page::after {
   content: '';
   position: fixed;
@@ -612,7 +715,15 @@ body {
   border-top: 1px solid var(--border);
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 0.75rem;
+}
+
+.metrics-sec-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .mc-value-small {
@@ -688,6 +799,16 @@ body {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--muted);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.viz-tag {
+  font-size: 0.62rem;
+  color: var(--cyan);
+  text-transform: none;
+  font-weight: 500;
 }
 
 .viz-image-wrap {
@@ -709,6 +830,33 @@ body {
   color: rgba(255,255,255,0.3);
   font-style: italic;
   border-top: 1px solid var(--border);
+}
+
+/* ── Interactive slice / threshold controls ── */
+.viz-controls {
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.control-group {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.control-slider {
+  accent-color: var(--cyan);
+  cursor: pointer;
 }
 
 /* ── How it works ────────────────────────────────── */

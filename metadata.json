@@ -1,0 +1,7 @@
+{
+  "name": "TumorGuard AI",
+  "description": "Uncertainty-aware brain tumor MRI segmentation reliability analyzer with MC Dropout and training-data familiarity assessment.",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

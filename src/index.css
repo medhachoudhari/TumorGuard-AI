@@ -1,0 +1,27 @@
+:root {
+  --text: #6b6375;
+  --text-h: #08060d;
+  --bg: #0a0f1e;
+  --border: rgba(255, 255, 255, 0.08);
+  --sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --mono: ui-monospace, Consolas, monospace;
+
+  font-family: var(--sans);
+  color-scheme: dark;
+  color: #ffffff;
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #0a0f1e;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
