@@ -422,12 +422,45 @@ def calculate_similarity_score(input_tensor, training_stats):
 # 8. RELIABILITY SCORING & VERDICT
 # ==============================================================================
 
+VERDICT_HIGH = "HIGH RELIABILITY"
+VERDICT_MODERATE = "MODERATE RELIABILITY"
+VERDICT_LOW = "LOW RELIABILITY"
+VERDICT_MANUAL = "MANUAL REVIEW REQUIRED"
+VERDICTS = (VERDICT_HIGH, VERDICT_MODERATE, VERDICT_LOW, VERDICT_MANUAL)
+
+
+def verdict_from_score(reliability_score):
+    """Map a reliability score to a verdict. Thresholds: 0.70 / 0.50 / 0.30 (inclusive lower bounds)."""
+    import math
+    try:
+        score = float(reliability_score)
+    except (TypeError, ValueError):
+        return VERDICT_MANUAL
+    if not math.isfinite(score):
+        return VERDICT_MANUAL
+    if score >= 0.70:
+        return VERDICT_HIGH
+    if score >= 0.50:
+        return VERDICT_MODERATE
+    if score >= 0.30:
+        return VERDICT_LOW
+    return VERDICT_MANUAL
+
+
 def calculate_reliability_and_verdict(similarity_score, entropy, variance=0.0005, max_diff=0.8):
     """
     Prototype reliability score for TumorGuard AI.
     This describes model reliability only; it does not diagnose cancer.
     """
     import math
+
+    # Invalid evidence must never yield a favourable verdict.
+    try:
+        raw_inputs = [float(similarity_score), float(entropy), float(variance), float(max_diff)]
+    except (TypeError, ValueError):
+        return 0.0, VERDICT_MANUAL
+    if not all(math.isfinite(x) for x in raw_inputs):
+        return 0.0, VERDICT_MANUAL
 
     # Familiarity
     fam_score = max(0.0, min(float(similarity_score), 1.0))
@@ -462,14 +495,112 @@ def calculate_reliability_and_verdict(similarity_score, entropy, variance=0.0005
 
     reliability_score = max(0.0, min(float(reliability_score), 1.0))
 
-    # Prototype verdict
-    if reliability_score >= 0.70:
-        verdict = "HIGH RELIABILITY"
-    elif reliability_score >= 0.50:
-        verdict = "MODERATE RELIABILITY"
-    elif reliability_score >= 0.30:
-        verdict = "LOW RELIABILITY"
-    else:
-        verdict = "MANUAL REVIEW REQUIRED"
+    return reliability_score, verdict_from_score(reliability_score)
 
-    return reliability_score, verdict
+
+# ==============================================================================
+# 9. CHECKPOINT LOADING
+# ==============================================================================
+# Trust model: checkpoints are deserialized with torch.load(weights_only=True),
+# which restricts unpickling to tensors and plain containers. This reduces, but
+# does not eliminate, risk from untrusted files; a file extension is not a
+# security boundary. Only load checkpoints from sources you trust.
+
+CHECKPOINT_WRAPPER_KEYS = ("model_state_dict", "state_dict")
+
+
+class CheckpointError(ValueError):
+    """Raised when a checkpoint file is missing, malformed or incompatible."""
+
+
+def load_checkpoint_payload(path, map_location="cpu"):
+    """Safely deserialize a checkpoint file and return the raw payload (a dict)."""
+    name = os.path.basename(str(path))
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"Checkpoint not found: {name}")
+    try:
+        payload = torch.load(path, map_location=map_location, weights_only=True)
+    except Exception as exc:
+        raise CheckpointError(
+            f"Could not safely load checkpoint '{name}' with weights_only=True: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise CheckpointError(
+            f"Checkpoint '{name}' must contain a dict, got {type(payload).__name__}."
+        )
+    return payload
+
+
+def extract_state_dict(payload):
+    """
+    Return (state_dict, metadata) from a checkpoint payload.
+
+    Supported formats:
+      * wrapped: {"model_state_dict" | "state_dict": {...}, ...metadata}
+      * raw:     {param_name: tensor, ...}
+    Anything else raises CheckpointError.
+    """
+    if not isinstance(payload, dict):
+        raise CheckpointError(f"Checkpoint payload must be a dict, got {type(payload).__name__}.")
+
+    wrappers = [k for k in CHECKPOINT_WRAPPER_KEYS if k in payload]
+    if len(wrappers) > 1:
+        raise CheckpointError(f"Ambiguous checkpoint: contains multiple state keys {wrappers}.")
+    if wrappers:
+        state_dict = payload[wrappers[0]]
+        metadata = {k: v for k, v in payload.items() if k != wrappers[0]}
+    else:
+        state_dict = payload
+        metadata = {}
+
+    if not isinstance(state_dict, dict) or not state_dict:
+        raise CheckpointError("Checkpoint state dict is empty or not a dict.")
+    bad_keys = [k for k in state_dict if not isinstance(k, str)]
+    non_tensors = [k for k, v in state_dict.items() if not torch.is_tensor(v)]
+    if bad_keys or non_tensors:
+        shown = [str(k) for k in (non_tensors or bad_keys)][:5]
+        raise CheckpointError(
+            "Unrecognized checkpoint format: expected a raw state dict or a dict with "
+            f"one of {list(CHECKPOINT_WRAPPER_KEYS)}; non-tensor entries: {shown}."
+        )
+    return state_dict, metadata
+
+
+def load_model_checkpoint(model, path, map_location="cpu", strict=True):
+    """
+    Load a checkpoint into `model` and return its metadata dict (epoch, val_loss...).
+
+    With strict=True (default) any missing key, unexpected key, shape mismatch or
+    non-finite weight raises CheckpointError and the model is left unmodified.
+    """
+    name = os.path.basename(str(path))
+    payload = load_checkpoint_payload(path, map_location=map_location)
+    state_dict, metadata = extract_state_dict(payload)
+
+    expected = model.state_dict()
+    missing = sorted(set(expected) - set(state_dict))
+    unexpected = sorted(set(state_dict) - set(expected))
+    mismatched = [
+        f"{k}: checkpoint {tuple(state_dict[k].shape)} vs model {tuple(expected[k].shape)}"
+        for k in sorted(set(expected) & set(state_dict))
+        if state_dict[k].shape != expected[k].shape
+    ]
+    nonfinite = [
+        k for k, v in state_dict.items()
+        if v.is_floating_point() and not bool(torch.isfinite(v).all())
+    ]
+    problems = []
+    if mismatched:
+        problems.append(f"shape mismatches: {mismatched[:5]}")
+    if nonfinite:
+        problems.append(f"non-finite weights in: {nonfinite[:5]}")
+    if strict and missing:
+        problems.append(f"missing keys: {missing[:5]}{' ...' if len(missing) > 5 else ''}")
+    if strict and unexpected:
+        problems.append(f"unexpected keys: {unexpected[:5]}{' ...' if len(unexpected) > 5 else ''}")
+    if problems:
+        raise CheckpointError(f"Checkpoint '{name}' is incompatible with the model: " + "; ".join(problems))
+
+    model.load_state_dict(state_dict, strict=strict)
+    return metadata

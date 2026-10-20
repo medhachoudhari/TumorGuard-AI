@@ -125,13 +125,7 @@ model = tumorguard_core.TumorGuardUNet(
     dropout_rate=0.3
 ).to(DEVICE)
 
-checkpoint = torch.load(
-    MODEL_PATH,
-    map_location=DEVICE,
-    weights_only=False
-)
-
-model.load_state_dict(checkpoint["model_state_dict"])
+checkpoint = tumorguard_core.load_model_checkpoint(model, MODEL_PATH, map_location=DEVICE)
 
 model.eval()
 

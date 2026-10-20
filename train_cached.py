@@ -276,7 +276,7 @@ def train():
     # ── Post-training: reload best and evaluate ───────────────────
     print(f"\n  Reloading best checkpoint (epoch {best_epoch})...")
     model_best = tumorguard_core.TumorGuardUNet(in_channels=3, out_channels=1, dropout_rate=0.3)
-    model_best.load_state_dict(torch.load(BEST_CKPT, weights_only=True, map_location=device))
+    tumorguard_core.load_model_checkpoint(model_best, BEST_CKPT, map_location=device)
     model_best = model_best.to(device)
     model_best.eval()
 

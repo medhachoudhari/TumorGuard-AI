@@ -39,7 +39,7 @@ if not os.path.exists(CKPT_PATH):
     raise FileNotFoundError(f"Checkpoint not found: {CKPT_PATH}")
 
 model = tumorguard_core.TumorGuardUNet()
-checkpoint = torch.load(CKPT_PATH, weights_only=True, map_location="cpu"); model.load_state_dict(checkpoint["model_state_dict"])
+tumorguard_core.load_model_checkpoint(model, CKPT_PATH, map_location="cpu")
 model.eval() # Base state; MC Dropout will switch Dropouts to train mode.
 print(f"[*] Checkpoint loaded: {CKPT_PATH}")
 

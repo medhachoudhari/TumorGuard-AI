@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Brain, Scissors, Dices, Layers, ShieldCheck } from 'lucide-react';
 import './App.css';
+import { verdictClass, verdictLabel, isKnownVerdict } from './verdict';
 
 const BACKEND = 'http://127.0.0.1:5000';
 
@@ -9,13 +10,6 @@ const MODALITIES = [
   { key: 't1ce', label: 'T1CE',  desc: 'T1 Contrast Enhanced' },
   { key: 't2',   label: 'T2',    desc: 'T2 Weighted' },
 ];
-
-function verdictClass(v) {
-  if (!v) return '';
-  if (v === 'SAFE') return 'v-safe';
-  if (v.includes('NEEDS')) return 'v-attention';
-  return 'v-manual';
-}
 
 /* ─────────────────────────────────────────────────────────────
    Upload Page
@@ -203,7 +197,10 @@ function ResultsPage({ result, onReset }) {
         <div className={`verdict-section ${vc}`}>
           <div className="verdict-content">
             <p className="verdict-eyebrow">AI Segmentation Reliability</p>
-            <div className="verdict-value">{result.verdict}</div>
+            <div className="verdict-value">{verdictLabel(result.verdict)}</div>
+            {!isKnownVerdict(result.verdict) && (
+              <p className="verdict-caption">The server returned an unrecognized or missing verdict, so this result is flagged for manual review.</p>
+            )}
             <p className="verdict-caption">
               Reliability combines two signals: how familiar the scan is to the training distribution and how consistent the model's predictions are across stochastic inference passes.
             </p>

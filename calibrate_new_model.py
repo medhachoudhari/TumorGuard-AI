@@ -96,8 +96,7 @@ def run_calibration():
     # ── Load model ────────────────────────────────────────────────
     print(f"\n[1/4] Loading checkpoint: {CKPT_PATH}")
     model = tumorguard_core.TumorGuardUNet()
-    checkpoint = torch.load(CKPT_PATH, weights_only=True)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    tumorguard_core.load_model_checkpoint(model, CKPT_PATH, map_location="cpu")
     model.eval()
     print("  Checkpoint loaded OK.")
 
