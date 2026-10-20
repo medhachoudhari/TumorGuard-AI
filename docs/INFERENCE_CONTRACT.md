@@ -51,7 +51,7 @@ Consequences: the metrics in `docs/BASELINE.md` describe the deterministic path,
 
 `/predict` returns JSON. Original fields (unchanged): `status`, `slice_index`, `familiarity_score`, `uncertainty_score`, `predictive_entropy`, `max_probability_difference`, `reliability_score`, `verdict`, `images` (`mri`, `segmentation_overlay`, `uncertainty_heatmap` as base64 PNG data URIs) and `disclaimer`.
 
-Fields added in this release (additive): `slice_selection_mode` (`automatic` | `explicit`), `num_slices`, `mask_pixels`, `prediction_method` (`mc_dropout_mean`, 10 passes, threshold 0.5, operator `>`), `reliability_breakdown` (per-signal confidence, weight, contribution), `input_validation` (shape, slices, affine consistency, non-finite fraction, warnings), `image_info` (width, height, orientation, heatmap scale) and `reliability_evidence_layer` (see `reliability_evidence.py`). The optional form field `slice_index` selects an explicit slice (0 to num_slices-1). `/health` additionally returns `limits.max_upload_mb`.
+Phase 2B fields (preserved exactly as implemented there): `slice_selection_mode` (`explicit` | `automatic_flair_heuristic`), `prediction_method` (`mc_dropout_consensus_10_passes`), `mc_prediction` and `deterministic_prediction` (`tumor_pixels`, `threshold`, `method`). Fields added in this release (additive): `num_slices`, `mask_pixels` (= MC-mean mask pixels), `prediction_settings` (10 passes, threshold 0.5, MC operator `>`, deterministic operator `>=`), `reliability_breakdown` (per-signal confidence, weight, contribution), `input_validation` (shape, slices, affine consistency, non-finite fraction, warnings), `image_info` (width, height, orientation, heatmap scale) and `reliability_evidence_layer` (see `reliability_evidence.py`). The optional form field `slice_index` selects an explicit slice (0 to num_slices-1). `/health` additionally returns `limits.max_upload_mb`.
 
 **Rendering (`rendering.py`):** all three panels use one display transform (`np.rot90`, 90 degrees counter-clockwise) and are written at the native 128 x 128 model resolution with no resampling or smoothing. FLAIR is windowed to the 1st-99th percentile of non-zero pixels (background black). The overlay is the binary mask in red at 50% alpha. The heatmap is the per-pixel variance scaled linearly from 0 to this slice's maximum (returned as `image_info.heatmap_max_variance`) with the `inferno` colour map, alpha proportional to the scaled value. Left/right convention assumes standard BraTS orientation and is not verified from the affine.
 
@@ -66,15 +66,15 @@ If no pixel exceeds 0.5 the response is still HTTP 200 with an all-zero overlay 
 | Case | Behaviour |
 |---|---|
 | Missing modality / `seg` supplied / empty name / wrong extension (case-insensitive) | HTTP 400 with `error_code` (`MISSING_MODALITY`, `SEG_NOT_ALLOWED`, `EMPTY_FILE`, `INVALID_FILE_TYPE`) |
-| Unreadable NIfTI, not 3D, in-plane < 32 px or any axis > 1024 | HTTP 400 (`INVALID_NIFTI`, `INVALID_SHAPE`) |
-| Different shapes or affines across modalities | HTTP 400 `SPATIAL_MISMATCH` |
-| All-zero volume; more than 0.1% non-finite voxels | HTTP 400 `EMPTY_VOLUME`, `NON_FINITE_DATA` |
+| Unreadable NIfTI, not 3D, non-positive dimensions or voxel spacing (Phase 2B `validate_modality_volumes`) | HTTP 400 (`INVALID_NIFTI`, `INVALID_SHAPE`) |
+| Different shapes, voxel spacings or affines across modalities | HTTP 400 `SPATIAL_MISMATCH` |
+| All-zero volume; any non-finite voxel | HTTP 400 `EMPTY_VOLUME`, `NON_FINITE_DATA` |
 | Invalid `slice_index` | HTTP 400 `INVALID_SLICE_INDEX` |
-| Upload larger than `TUMORGUARD_MAX_UPLOAD_MB` (default 512 MB total) | HTTP 413 `UPLOAD_TOO_LARGE` |
+| Upload larger than `TUMORGUARD_MAX_CONTENT_LENGTH` bytes (default 150 MB total) | HTTP 413 `UPLOAD_TOO_LARGE` |
 | Non-finite model output | HTTP 422 `NON_FINITE_OUTPUT` |
 | Unexpected error | HTTP 500 `INTERNAL_ERROR` with a generic message; details only in the server log |
 | Third axis not smaller than the in-plane axes, or strongly non-square in-plane | accepted, with `input_validation.warnings` (possible non-axial storage; resizing would distort the image) |
 
-Error bodies never contain file-system paths, exception text or tracebacks (tested). Client file names are never used on disk. CORS is enabled for all origins (`CORS(app)`); the server binds to `127.0.0.1:5000`.
+Every error body is `{status: "error", error, error_code}` (`error_code` is additive to the Phase 2B body). Error bodies never contain file-system paths, exception text or tracebacks (tested). Client file names are never used on disk. CORS is enabled for all origins (`CORS(app)`); the server binds to `127.0.0.1:5000`.
 
 Not validated: voxel spacing, orientation labels in the affine, intensity ranges, and whether the files are actually FLAIR/T1CE/T2 in that order.

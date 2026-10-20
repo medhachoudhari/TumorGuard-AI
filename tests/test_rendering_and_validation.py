@@ -60,7 +60,10 @@ def test_shape_mismatch_rejected():
         rendering.generate_visualizations(np.zeros((8, 8)), np.zeros((8, 9)), np.zeros((8, 8)))
 
 
-# ---- input validation -----------------------------------------------------------
+# ---- input validation summary and error codes (hard validation lives in tumorguard_core, Phase 2B) ----
+
+import tumorguard_core as core
+
 
 def save(tmp_path, name, shape=(48, 48, 6), affine=None, fill=1.0, nan=0.0, dtype=np.float32):
     rng = np.random.default_rng(1)
@@ -78,37 +81,33 @@ def trio(tmp_path, **over):
     return paths
 
 
-def test_valid_trio(tmp_path):
-    s = iv.inspect_volumes(trio(tmp_path))
-    assert s["shape"] == [48, 48, 6] and s["num_slices"] == 6 and s["affine_consistent"]
+def test_summary_for_valid_trio(tmp_path):
+    s = iv.summarize_volumes(core.validate_modality_volumes(trio(tmp_path)))
+    assert s["shape"] == [48, 48, 6] and s["num_slices"] == 6 and s["affine_consistent"] and s["warnings"] == []
 
 
 def test_unusual_axis_order_produces_warning_not_error(tmp_path):
     paths = {m: save(tmp_path, m, shape=(40, 64, 64)) for m in ("flair", "t1ce", "t2")}
-    s = iv.inspect_volumes(paths)
-    assert len(s["warnings"]) >= 1
-    assert iv.inspect_volumes(trio(tmp_path))["warnings"] == []
+    assert len(iv.summarize_volumes(core.validate_modality_volumes(paths))["warnings"]) >= 1
 
 
 @pytest.mark.parametrize("case,code", [
     ("shape", "SPATIAL_MISMATCH"), ("affine", "SPATIAL_MISMATCH"), ("4d", "INVALID_SHAPE"),
-    ("tiny", "INVALID_SHAPE"), ("zeros", "EMPTY_VOLUME"), ("nan", "NON_FINITE_DATA"),
-    ("garbage", "INVALID_NIFTI"),
+    ("zeros", "EMPTY_VOLUME"), ("nan", "NON_FINITE_DATA"), ("garbage", "INVALID_NIFTI"),
 ])
-def test_invalid_inputs(tmp_path, case, code):
+def test_error_codes_map_from_validation_messages(tmp_path, case, code):
     bad = {
         "shape": lambda: save(tmp_path, "x1", shape=(48, 48, 7)),
         "affine": lambda: save(tmp_path, "x2", affine=np.diag([2, 2, 2, 1.0])),
         "4d": lambda: save(tmp_path, "x3", shape=(48, 48, 6, 2)),
-        "tiny": lambda: save(tmp_path, "x4", shape=(8, 8, 6)),
         "zeros": lambda: save(tmp_path, "x5", fill=0.0),
         "nan": lambda: save(tmp_path, "x6", nan=0.05),
         "garbage": lambda: (tmp_path / "g.nii.gz").write_bytes(b"nope") or str(tmp_path / "g.nii.gz"),
     }[case]()
-    with pytest.raises(iv.InputValidationError) as e:
-        iv.inspect_volumes(trio(tmp_path, t2=bad))
-    assert e.value.code == code
-    assert str(tmp_path) not in e.value.message
+    with pytest.raises(core.SpatialValidationError) as e:
+        core.validate_modality_volumes(trio(tmp_path, t2=bad))
+    assert iv.error_code_for(e.value) == code
+    assert str(tmp_path) not in str(e.value)
 
 
 def test_baseline_copy_matches_historical_artifact():

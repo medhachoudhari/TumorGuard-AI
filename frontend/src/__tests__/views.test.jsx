@@ -26,9 +26,9 @@ const evidence = (over = {}) => ({
   ...over,
 });
 const result = (over = {}) => ({
-  status: 'success', slice_index: 5, num_slices: 10, slice_selection_mode: 'automatic', verdict: 'HIGH RELIABILITY',
+  status: 'success', slice_index: 5, num_slices: 10, slice_selection_mode: 'automatic_flair_heuristic', verdict: 'HIGH RELIABILITY',
   reliability_score: 0.8, familiarity_score: 0.5, uncertainty_score: 0.0001, predictive_entropy: 0.02, max_probability_difference: 0.5, mask_pixels: 10,
-  prediction_method: { num_passes: 10, threshold: 0.5, operator: '>' }, image_info: { heatmap_max_variance: 0.01 },
+  prediction_method: 'mc_dropout_consensus_10_passes', prediction_settings: { num_passes: 10, threshold: 0.5, mc_operator: '>' }, deterministic_prediction: { tumor_pixels: 12, threshold: 0.5, method: 'single_pass_eval' }, image_info: { heatmap_max_variance: 0.01 },
   images: { mri: PNG, segmentation_overlay: PNG, uncertainty_heatmap: PNG },
   reliability_breakdown: { familiarity: { confidence: 0.5, weight: 0.4, contribution: 0.2 } },
   reliability_evidence_layer: evidence(), disclaimer: 'Disclaimer text', ...over,
@@ -65,6 +65,7 @@ describe('Results controls', () => {
   it('Auto slice is disabled while already automatic and works when explicit', async () => {
     const { rerender } = render(<Results {...resultsProps()} />);
     expect(screen.getByRole('button', { name: 'Auto slice' })).toBeDisabled();
+    expect(screen.getByText(/Single deterministic pass: 12 px/)).toBeInTheDocument();
     const p = resultsProps({ result: result({ slice_selection_mode: 'explicit' }) }); rerender(<Results {...p} />);
     await userEvent.click(screen.getByRole('button', { name: 'Auto slice' })); expect(p.onAuto).toHaveBeenCalled();
   });

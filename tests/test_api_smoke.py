@@ -100,11 +100,15 @@ def test_original_response_fields_preserved_and_new_fields_added(client, tmp_pat
     for k in ("status", "slice_index", "familiarity_score", "uncertainty_score", "predictive_entropy",
               "max_probability_difference", "reliability_score", "verdict", "images", "disclaimer"):
         assert k in b
-    for k in ("slice_selection_mode", "num_slices", "prediction_method", "mask_pixels", "image_info",
+    for k in ("slice_selection_mode", "num_slices", "prediction_method", "mc_prediction", "deterministic_prediction",
+              "prediction_settings", "mask_pixels", "image_info",
               "input_validation", "reliability_breakdown", "reliability_evidence_layer"):
         assert k in b
-    assert b["slice_selection_mode"] == "automatic" and b["num_slices"] == 20
-    assert b["prediction_method"]["num_passes"] == 10
+    assert b["slice_selection_mode"] == "automatic_flair_heuristic" and b["num_slices"] == 20
+    assert b["prediction_settings"]["num_passes"] == 10
+    assert b["prediction_method"] == "mc_dropout_consensus_10_passes"  # Phase 2B field preserved
+    assert b["mc_prediction"]["tumor_pixels"] == b["mask_pixels"]
+    assert b["deterministic_prediction"]["method"] == "single_pass_eval"
     ev = b["reliability_evidence_layer"]
     assert ev["legacy_verdict"] == b["verdict"] and ev["legacy_reliability_score"] == pytest.approx(b["reliability_score"])
     assert ev["provenance"]["checkpoint_sha256"]
@@ -120,6 +124,7 @@ def test_explicit_slice_selection(client, tmp_path):
 def test_invalid_slice_index_rejected(client, tmp_path, bad):
     r = post(client, tmp_path, {"slice_index": bad})
     assert r.status_code == 400 and r.get_json()["error_code"] == "INVALID_SLICE_INDEX"
+    assert r.get_json()["status"] == "error"
 
 
 def test_spatial_mismatch_rejected_via_api(client, tmp_path):

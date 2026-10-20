@@ -62,7 +62,7 @@ export default function Results({
           <h1>Analysis results</h1>
           <p className="tg-fine">
             Case {caseId} · slice {idx}{n !== null ? ` of ${n - 1}` : ''} · {result.slice_selection_mode || 'unknown'} selection ·
-            {' '}{result.prediction_method ? `${result.prediction_method.num_passes}-pass MC Dropout mean, threshold ${result.prediction_method.operator} ${result.prediction_method.threshold}` : 'prediction method not reported'}
+            {' '}{result.prediction_settings ? `${result.prediction_settings.num_passes}-pass MC Dropout mean, threshold ${result.prediction_settings.mc_operator} ${result.prediction_settings.threshold}` : 'prediction method not reported'}
           </p>
         </div>
         <div className="tg-row">
@@ -83,7 +83,7 @@ export default function Results({
             onChange={(e) => setJump(e.target.value)} placeholder={String(idx)} />
           <button type="submit" className="tg-btn tg-btn-ghost tg-btn-sm" disabled={!canReslice || reslicing || !jumpValid}>Go</button>
         </form>
-        <button type="button" className="tg-btn tg-btn-ghost tg-btn-sm" disabled={!canReslice || reslicing || result.slice_selection_mode === 'automatic'} onClick={onAuto}>Auto slice</button>
+        <button type="button" className="tg-btn tg-btn-ghost tg-btn-sm" disabled={!canReslice || reslicing || String(result.slice_selection_mode || '').startsWith('automatic')} onClick={onAuto}>Auto slice</button>
         <span className="tg-sep" aria-hidden="true" />
         <button type="button" className="tg-btn tg-btn-ghost tg-btn-sm" disabled={zoomIdx === 0} onClick={() => setZoomIdx((z) => Math.max(0, z - 1))} aria-label="Zoom out">−</button>
         <span className="tg-fine" aria-live="polite">{Math.round(zoom * 100)}%</span>
@@ -96,7 +96,8 @@ export default function Results({
       <div className={`tg-panels${reslicing ? ' is-busy' : ''}`}>
         <Panel title="FLAIR MRI slice" src={result.images.mri} alt="FLAIR MRI slice used as model input" filename={`flair_slice_${idx}.png`} zoom={zoom} />
         <Panel title="U-Net segmentation overlay" src={result.images.segmentation_overlay} alt="Predicted tumour mask in red over the FLAIR slice" filename={`segmentation_slice_${idx}.png`} zoom={zoom}>
-          <p className="tg-fine">Red: predicted mask ({Number.isFinite(result.mask_pixels) ? `${result.mask_pixels} px` : 'size n/a'}). {result.mask_pixels === 0 ? 'No tumour pixels predicted on this slice.' : ''}</p>
+          <p className="tg-fine">Red: MC-mean mask ({Number.isFinite(result.mask_pixels) ? `${result.mask_pixels} px` : 'size n/a'}). {result.mask_pixels === 0 ? 'No tumour pixels predicted on this slice. ' : ''}
+            {result.deterministic_prediction && Number.isFinite(result.deterministic_prediction.tumor_pixels) ? `Single deterministic pass: ${result.deterministic_prediction.tumor_pixels} px.` : ''}</p>
         </Panel>
         <Panel title="MC Dropout uncertainty" src={result.images.uncertainty_heatmap} alt="Predictive variance heatmap over the FLAIR slice" filename={`uncertainty_slice_${idx}.png`} zoom={zoom}>
           <div className="tg-legend" aria-label="Uncertainty colour scale">

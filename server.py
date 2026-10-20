@@ -24,11 +24,14 @@ import reliability_evidence
 app = Flask(__name__)
 CORS(app)
 
-MAX_UPLOAD_MB = int(os.environ.get("TUMORGUARD_MAX_UPLOAD_MB", "512"))
-app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
+DEFAULT_MAX_CONTENT_LENGTH = 150 * 1024 * 1024  # 150 MB (Phase 2B)
+app.config["MAX_CONTENT_LENGTH"] = int(
+    os.environ.get("TUMORGUARD_MAX_CONTENT_LENGTH", DEFAULT_MAX_CONTENT_LENGTH)
+)
 NUM_MC_PASSES = 10
 SEGMENTATION_THRESHOLD = 0.5
-log = logging.getLogger("tumorguard")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logger = logging.getLogger("tumorguard")
 
 # ==============================================================================
 # STARTUP INITIALIZATION
@@ -80,28 +83,19 @@ print("=" * 60 + "\n")
 generate_visualizations = rendering.generate_visualizations
 
 
+def max_upload_mb():
+    return app.config.get("MAX_CONTENT_LENGTH", DEFAULT_MAX_CONTENT_LENGTH) // (1024 * 1024)
+
+
 def error_response(code, message, status=400):
-    """Safe error body: a stable code and a message that never contains paths or tracebacks."""
-    return jsonify({"error": message, "error_code": code}), status
-
-
-def parse_slice_index(raw, num_slices):
-    """Returns (slice_index or None, mode). Raises InputValidationError if invalid."""
-    if raw is None or str(raw).strip() == "":
-        return None, "automatic"
-    try:
-        idx = int(str(raw).strip())
-    except ValueError:
-        raise input_validation.InputValidationError("INVALID_SLICE_INDEX", "slice_index must be an integer.")
-    if not 0 <= idx < num_slices:
-        raise input_validation.InputValidationError(
-            "INVALID_SLICE_INDEX", f"slice_index must be between 0 and {num_slices - 1}.")
-    return idx, "explicit"
+    """Safe error body: status, a stable code and a message with no paths or tracebacks."""
+    return jsonify({"status": "error", "error": message, "error_code": code}), status
 
 
 @app.errorhandler(413)
-def too_large(_e):
-    return error_response("UPLOAD_TOO_LARGE", f"Upload exceeds the {MAX_UPLOAD_MB} MB limit.", 413)
+def request_entity_too_large(_error):
+    logger.warning("Upload rejected: payload exceeds configured maximum size of %d MB", max_upload_mb())
+    return error_response("UPLOAD_TOO_LARGE", f"Upload payload exceeds maximum allowed size ({max_upload_mb()} MB).", 413)
 
 
 @app.errorhandler(404)
@@ -124,7 +118,7 @@ def health():
         "status": "ok",
         "model_loaded": model is not None,
         "training_stats_loaded": training_stats is not None,
-        "limits": {"max_upload_mb": MAX_UPLOAD_MB},
+        "limits": {"max_upload_mb": max_upload_mb()},
     })
 
 
@@ -154,6 +148,18 @@ def predict():
                 return error_response("INVALID_FILE_TYPE",
                                       f"Invalid file type for '{name}'. Expected .nii or .nii.gz.")
 
+        raw_slice = request.form.get('slice_index')
+        if raw_slice is None:
+            raw_slice = request.args.get('slice_index')
+
+        explicit_slice = None
+        if raw_slice is not None and str(raw_slice).strip() != '':
+            try:
+                explicit_slice = int(str(raw_slice).strip())
+            except ValueError:
+                return error_response("INVALID_SLICE_INDEX",
+                                      f"Invalid slice_index '{raw_slice}': slice_index must be an integer.")
+
         # 2. Process in a temporary directory (client file names are never used on disk)
         with tempfile.TemporaryDirectory() as temp_dir:
             paths = {}
@@ -163,23 +169,52 @@ def predict():
                 f.save(path)
                 paths[name] = path
 
-            # 3. Spatial / content validation
-            input_summary = input_validation.inspect_volumes(paths)
+            # 2b. Validate 3D NIfTI, shapes, voxel spacing and affines (Phase 2B)
+            try:
+                images = tumorguard_core.validate_modality_volumes(paths)
+            except tumorguard_core.SpatialValidationError as sve:
+                logger.warning("Spatial validation rejected: %s", sve)
+                return error_response(input_validation.error_code_for(sve), str(sve))
+            except Exception as e:
+                logger.warning("NIfTI validation failed: %s", e)
+                return error_response("INVALID_NIFTI",
+                                      "Uploaded scan files could not be validated as valid 3D NIfTI volumes.")
+            input_summary = input_validation.summarize_volumes(images)
             num_slices = input_summary["num_slices"]
 
-            # 4. Slice selection (inference only - no ground truth)
-            requested_slice, slice_mode = parse_slice_index(request.form.get('slice_index'), num_slices)
-            if requested_slice is None:
-                best_slice = tumorguard_core.select_inference_slice(paths['flair'])
+            # 3. Slice selection (inference only - no ground truth)
+            if explicit_slice is not None:
+                if explicit_slice < 0 or explicit_slice >= num_slices:
+                    return error_response(
+                        "INVALID_SLICE_INDEX",
+                        f"slice_index {explicit_slice} is out of range. Must be between 0 and {num_slices - 1}.")
+                best_slice = explicit_slice
+                selection_mode = "explicit"
             else:
-                best_slice = requested_slice
+                try:
+                    best_slice = tumorguard_core.select_inference_slice(paths['flair'])
+                    selection_mode = "automatic_flair_heuristic"
+                except Exception as e:
+                    logger.error("Slice selection error: %s", e, exc_info=True)
+                    return error_response("SLICE_SELECTION_FAILED",
+                                          "Failed to determine an informative slice from the FLAIR scan.")
 
-            # 5. Preprocessing
-            input_tensor = tumorguard_core.load_and_preprocess_mri(
-                paths['flair'], paths['t1ce'], paths['t2'], slice_idx=best_slice
-            ).unsqueeze(0)  # (1, 3, H, W)
+            # 4. Preprocessing
+            try:
+                input_tensor = tumorguard_core.load_and_preprocess_mri(
+                    paths['flair'], paths['t1ce'], paths['t2'], slice_idx=best_slice
+                ).unsqueeze(0)  # (1, 3, H, W)
+            except Exception as e:
+                logger.error("Preprocessing error: %s", e, exc_info=True)
+                return error_response("PREPROCESSING_FAILED",
+                                      "Failed to preprocess MRI scan slices for model inference.")
 
-            # 6. MC Dropout inference
+            # 5a. Deterministic baseline inference (matches evaluation semantics)
+            _det_probs, det_binary = tumorguard_core.run_deterministic_inference(
+                model, input_tensor, threshold=SEGMENTATION_THRESHOLD)
+            det_tumor_pixels = int(det_binary.sum().item())
+
+            # 5b. MC Dropout inference (stochastic consensus and uncertainty metrics)
             mean_pred, var_map, unc_score, max_diff, entropy = \
                 tumorguard_core.run_mc_dropout_inference(model, input_tensor, num_passes=NUM_MC_PASSES)
 
@@ -188,71 +223,81 @@ def predict():
                                       "The model produced non-finite values for this input.", 422)
 
             pred_binary = (mean_pred > SEGMENTATION_THRESHOLD).float()
+            mc_tumor_pixels = int(pred_binary.sum().item())
 
-            # 7. Familiarity, reliability score and verdict (legacy semantics unchanged)
+            # 6. Familiarity, reliability score and verdict (legacy semantics unchanged)
             familiarity = tumorguard_core.calculate_similarity_score(input_tensor, training_stats)
             reliability_score, verdict = tumorguard_core.calculate_reliability_and_verdict(
                 familiarity, entropy, variance=unc_score, max_diff=max_diff)
             components = tumorguard_core.reliability_components(familiarity, entropy, unc_score, max_diff)
 
-            # 8. Visualisations (shared display transform keeps panels aligned)
+            # 7. Visualisations (shared display transform keeps panels aligned)
             flair_slice_np = input_tensor[0, 0].cpu().numpy()
             pred_mask_np = pred_binary[0, 0].cpu().numpy()
             var_map_np = var_map[0, 0].cpu().numpy()
             mri_b64, seg_b64, unc_b64, image_info = generate_visualizations(
                 flair_slice_np, pred_mask_np, var_map_np)
-            mask_pixels = int(pred_mask_np.sum())
 
-            # 9. Reliability Evidence Layer (additive; never alters the fields above)
+            # 8. Reliability Evidence Layer (additive; never alters the fields above)
             evidence = reliability_evidence.build_evidence_report(
                 input_summary=input_summary,
                 familiarity=familiarity,
                 familiarity_reference_available=training_stats.get("familiarity_reference") is not None,
                 entropy=entropy, variance=unc_score, max_diff=max_diff,
-                mask_pixels=mask_pixels, reliability_score=reliability_score, verdict=verdict,
+                mask_pixels=mc_tumor_pixels, reliability_score=reliability_score, verdict=verdict,
                 provenance=MODEL_PROVENANCE)
 
-            # 10. JSON response (original fields preserved)
+            # 9. JSON response (all original and Phase 2B fields preserved)
             response = {
                 "status": "success",
                 "slice_index": int(best_slice),
-                "slice_selection_mode": slice_mode,
-                "num_slices": int(num_slices),
+                "slice_selection_mode": selection_mode,
+                "prediction_method": "mc_dropout_consensus_10_passes",
+                "mc_prediction": {
+                    "tumor_pixels": mc_tumor_pixels,
+                    "threshold": SEGMENTATION_THRESHOLD
+                },
+                "deterministic_prediction": {
+                    "tumor_pixels": det_tumor_pixels,
+                    "threshold": SEGMENTATION_THRESHOLD,
+                    "method": "single_pass_eval"
+                },
                 "familiarity_score": float(familiarity),
                 "uncertainty_score": float(unc_score),
                 "predictive_entropy": float(entropy),
                 "max_probability_difference": float(max_diff),
                 "reliability_score": float(reliability_score),
                 "verdict": verdict,
-                "mask_pixels": mask_pixels,
-                "prediction_method": {
-                    "type": "mc_dropout_mean",
-                    "num_passes": NUM_MC_PASSES,
-                    "threshold": SEGMENTATION_THRESHOLD,
-                    "operator": ">",
-                },
-                "reliability_breakdown": components,
-                "input_validation": input_summary,
-                "image_info": image_info,
                 "images": {
                     "mri": mri_b64,
                     "segmentation_overlay": seg_b64,
                     "uncertainty_heatmap": unc_b64
                 },
+                "disclaimer": "This is a research prototype for AI segmentation reliability visualization. It does NOT diagnose cancer. It does NOT replace radiologist review. The verdict describes model reliability, not patient health status.",
+                # Additive fields (release: UI + evidence layer)
+                "num_slices": int(num_slices),
+                "mask_pixels": mc_tumor_pixels,
+                "prediction_settings": {
+                    "num_passes": NUM_MC_PASSES,
+                    "threshold": SEGMENTATION_THRESHOLD,
+                    "mc_operator": ">",
+                    "deterministic_operator": ">=",
+                },
+                "reliability_breakdown": components,
+                "input_validation": input_summary,
+                "image_info": image_info,
                 "reliability_evidence_layer": evidence,
-                "disclaimer": "This is a research prototype for AI segmentation reliability visualization. It does NOT diagnose cancer. It does NOT replace radiologist review. The verdict describes model reliability, not patient health status."
             }
 
             return jsonify(response)
 
-    except input_validation.InputValidationError as e:
-        return error_response(e.code, e.message, e.status)
     except HTTPException:
         raise  # e.g. 413 from MAX_CONTENT_LENGTH; handled by the JSON error handlers
-    except Exception:
+    except Exception as e:
         # Details go to the server log only; clients receive a generic message.
-        log.exception("Unhandled error during /predict")
-        return error_response("INTERNAL_ERROR", "Internal error during inference.", 500)
+        logger.error("Unhandled internal server error during inference: %s", e, exc_info=True)
+        return error_response("INTERNAL_ERROR",
+                              "An internal error occurred during inference. Please consult server logs for diagnostic details.", 500)
 
 
 if __name__ == '__main__':
