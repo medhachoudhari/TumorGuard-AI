@@ -164,6 +164,21 @@ def predict():
                     "error": f"Invalid file type for '{name}'. Expected .nii or .nii.gz."
                 }), 400
 
+        raw_slice = request.form.get('slice_index')
+        if raw_slice is None:
+            raw_slice = request.args.get('slice_index')
+
+        explicit_slice = None
+        if raw_slice is not None and str(raw_slice).strip() != '':
+            val_str = str(raw_slice).strip()
+            try:
+                explicit_slice = int(val_str)
+            except ValueError:
+                return jsonify({
+                    "status": "error",
+                    "error": f"Invalid slice_index '{raw_slice}': slice_index must be an integer."
+                }), 400
+
         # 2. Process in Temporary Directory
         with tempfile.TemporaryDirectory() as temp_dir:
             paths = {}
@@ -175,7 +190,7 @@ def predict():
 
             # 2b. Validate 3D NIfTI, shapes, voxel spacing, and affines
             try:
-                tumorguard_core.validate_modality_volumes(paths)
+                images = tumorguard_core.validate_modality_volumes(paths)
             except tumorguard_core.SpatialValidationError as sve:
                 logger.warning("Spatial validation rejected: %s", sve)
                 return jsonify({
@@ -189,15 +204,26 @@ def predict():
                     "error": "Uploaded scan files could not be validated as valid 3D NIfTI volumes."
                 }), 400
 
-            # 3. Slice Selection (Inference only - no GT)
-            try:
-                best_slice = tumorguard_core.select_inference_slice(paths['flair'])
-            except Exception as e:
-                logger.error("Slice selection error: %s", e, exc_info=True)
-                return jsonify({
-                    "status": "error",
-                    "error": "Failed to determine an informative slice from the FLAIR scan."
-                }), 400
+            # 3. Slice Selection
+            num_slices = images['flair'].shape[2]
+            if explicit_slice is not None:
+                if explicit_slice < 0 or explicit_slice >= num_slices:
+                    return jsonify({
+                        "status": "error",
+                        "error": f"slice_index {explicit_slice} is out of range. Must be between 0 and {num_slices - 1}."
+                    }), 400
+                best_slice = explicit_slice
+                selection_mode = "explicit"
+            else:
+                try:
+                    best_slice = tumorguard_core.select_inference_slice(paths['flair'])
+                    selection_mode = "automatic_flair_heuristic"
+                except Exception as e:
+                    logger.error("Slice selection error: %s", e, exc_info=True)
+                    return jsonify({
+                        "status": "error",
+                        "error": "Failed to determine an informative slice from the FLAIR scan."
+                    }), 400
 
             # 4. Preprocessing
             try:
@@ -211,12 +237,17 @@ def predict():
                     "error": "Failed to preprocess MRI scan slices for model inference."
                 }), 400
 
-            # 5. MC Dropout Inference
+            # 5a. Deterministic Baseline Inference (matching evaluation semantics)
+            det_probs, det_binary = tumorguard_core.run_deterministic_inference(model, input_tensor, threshold=0.5)
+            det_tumor_pixels = int(det_binary.sum().item())
+
+            # 5b. MC Dropout Inference (stochastic consensus & uncertainty metrics)
             mean_pred, var_map, unc_score, max_diff, entropy = \
                 tumorguard_core.run_mc_dropout_inference(model, input_tensor, num_passes=10)
 
             # Generate binary mask from mean prediction
             pred_binary = (mean_pred > 0.5).float()
+            mc_tumor_pixels = int(pred_binary.sum().item())
 
             # 6. Familiarity Score
             familiarity = tumorguard_core.calculate_similarity_score(input_tensor, training_stats)
@@ -236,6 +267,17 @@ def predict():
             response = {
                 "status": "success",
                 "slice_index": int(best_slice),
+                "slice_selection_mode": selection_mode,
+                "prediction_method": "mc_dropout_consensus_10_passes",
+                "mc_prediction": {
+                    "tumor_pixels": mc_tumor_pixels,
+                    "threshold": 0.5
+                },
+                "deterministic_prediction": {
+                    "tumor_pixels": det_tumor_pixels,
+                    "threshold": 0.5,
+                    "method": "single_pass_eval"
+                },
                 "familiarity_score": float(familiarity),
                 "uncertainty_score": float(unc_score),
                 "predictive_entropy": float(entropy),

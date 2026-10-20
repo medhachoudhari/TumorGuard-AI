@@ -384,7 +384,33 @@ def run_mc_dropout_inference(model, input_tensor, num_passes=10):
         posinf=0.0,
         neginf=0.0
     ).mean().item()
+
+    model.eval()  # Reset all modules back to eval mode
     return mean_pred, var_map, unc_score, max_diff, entropy
+
+
+def run_deterministic_inference(model, input_tensor, threshold=0.5):
+    """
+    Runs single-pass deterministic inference matching the evaluation baseline.
+    Ensures all modules (including Dropout and BatchNorm) are in eval mode.
+
+    Parameters
+    ----------
+    model : nn.Module
+    input_tensor : Tensor, shape (B, C, H, W)
+    threshold : float, default 0.5 (evaluation baseline uses >= threshold)
+
+    Returns
+    -------
+    probs : Tensor, shape (B, 1, H, W) — Sigmoid probability map
+    pred_binary : Tensor, shape (B, 1, H, W) — Thresholded binary mask (0.0 or 1.0)
+    """
+    model.eval()  # ensure all Dropout modules are in eval mode (no stochastic masking)
+    with torch.no_grad():
+        logits = model(input_tensor)
+        probs = torch.sigmoid(logits)
+        pred_binary = (probs >= threshold).float()
+    return probs, pred_binary
 
 
 # ==============================================================================
