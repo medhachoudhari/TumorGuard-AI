@@ -447,54 +447,69 @@ def verdict_from_score(reliability_score):
     return VERDICT_MANUAL
 
 
+# Heuristic normalisation bounds and weights (unchanged; not calibrated against error).
+VAR_LOW = 0.0003
+VAR_HIGH = 0.0009
+DIFF_LOW = 0.65
+DIFF_HIGH = 1.0
+RELIABILITY_WEIGHTS = {"familiarity": 0.40, "entropy": 0.20, "variance": 0.20, "pass_difference": 0.20}
+
+
+def reliability_components(similarity_score, entropy, variance=0.0005, max_diff=0.8):
+    """
+    Per-signal confidences and weighted contributions behind the reliability score.
+    Returns None if any input is non-finite or unparsable.
+    """
+    import math
+
+    try:
+        raw_inputs = [float(similarity_score), float(entropy), float(variance), float(max_diff)]
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(x) for x in raw_inputs):
+        return None
+
+    fam_score = max(0.0, min(float(similarity_score), 1.0))
+
+    max_entropy = math.log(2.0)
+    ent = max(0.0, min(float(entropy), max_entropy))
+    entropy_confidence = max(0.0, min((max_entropy - ent) / max_entropy, 1.0))
+
+    var = max(0.0, float(variance))
+    variance_confidence = max(0.0, min(1.0 - ((var - VAR_LOW) / (VAR_HIGH - VAR_LOW)), 1.0))
+
+    md = max(0.0, float(max_diff))
+    diff_confidence = max(0.0, min(1.0 - ((md - DIFF_LOW) / (DIFF_HIGH - DIFF_LOW)), 1.0))
+
+    values = {
+        "familiarity": fam_score,
+        "entropy": entropy_confidence,
+        "variance": variance_confidence,
+        "pass_difference": diff_confidence,
+    }
+    return {
+        k: {"confidence": v, "weight": RELIABILITY_WEIGHTS[k], "contribution": v * RELIABILITY_WEIGHTS[k]}
+        for k, v in values.items()
+    }
+
+
 def calculate_reliability_and_verdict(similarity_score, entropy, variance=0.0005, max_diff=0.8):
     """
     Prototype reliability score for TumorGuard AI.
     This describes model reliability only; it does not diagnose cancer.
+    Invalid evidence never yields a favourable verdict.
     """
-    import math
-
-    # Invalid evidence must never yield a favourable verdict.
-    try:
-        raw_inputs = [float(similarity_score), float(entropy), float(variance), float(max_diff)]
-    except (TypeError, ValueError):
-        return 0.0, VERDICT_MANUAL
-    if not all(math.isfinite(x) for x in raw_inputs):
+    components = reliability_components(similarity_score, entropy, variance, max_diff)
+    if components is None:
         return 0.0, VERDICT_MANUAL
 
-    # Familiarity
-    fam_score = max(0.0, min(float(similarity_score), 1.0))
-
-    # Entropy confidence
-    max_entropy = math.log(2.0)
-    entropy = max(0.0, min(float(entropy), max_entropy))
-    entropy_confidence = (max_entropy - entropy) / max_entropy
-    entropy_confidence = max(0.0, min(entropy_confidence, 1.0))
-
-    # Variance confidence
-    variance = max(0.0, float(variance))
-    VAR_LOW = 0.0003
-    VAR_HIGH = 0.0009
-    variance_confidence = 1.0 - ((variance - VAR_LOW) / (VAR_HIGH - VAR_LOW))
-    variance_confidence = max(0.0, min(variance_confidence, 1.0))
-
-    # Max-difference confidence
-    max_diff = max(0.0, float(max_diff))
-    DIFF_LOW = 0.65
-    DIFF_HIGH = 1.0
-    diff_confidence = 1.0 - ((max_diff - DIFF_LOW) / (DIFF_HIGH - DIFF_LOW))
-    diff_confidence = max(0.0, min(diff_confidence, 1.0))
-
-    # Combined reliability
     reliability_score = (
-        0.40 * fam_score +
-        0.20 * entropy_confidence +
-        0.20 * variance_confidence +
-        0.20 * diff_confidence
+        0.40 * components["familiarity"]["confidence"] +
+        0.20 * components["entropy"]["confidence"] +
+        0.20 * components["variance"]["confidence"] +
+        0.20 * components["pass_difference"]["confidence"]
     )
-
     reliability_score = max(0.0, min(float(reliability_score), 1.0))
-
     return reliability_score, verdict_from_score(reliability_score)
 
 

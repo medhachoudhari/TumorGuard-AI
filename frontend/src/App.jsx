@@ -1,313 +1,202 @@
-import { useState, useEffect, useRef } from 'react';
-import { Brain, Scissors, Dices, Layers, ShieldCheck } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
-import { verdictClass, verdictLabel, isKnownVerdict } from './verdict';
+import Nav from './components/Nav.jsx';
+import Landing from './views/Landing.jsx';
+import Upload from './views/Upload.jsx';
+import Analysis from './views/Analysis.jsx';
+import Results from './views/Results.jsx';
+import Evidence from './views/Evidence.jsx';
+import History from './views/History.jsx';
+import Research from './views/Research.jsx';
+import About from './views/About.jsx';
+import { useRoute } from './router.js';
+import { checkHealth, predict, DEFAULT_MAX_UPLOAD_MB } from './api.js';
+import { inspectFile, combineValidation } from './nifti.js';
+import { makeRecord, newCaseId, loadStored, saveStored } from './history.js';
+import { buildReportHTML, buildReportJSON, downloadText } from './report.js';
 
-const BACKEND = 'http://127.0.0.1:5000';
+const EMPTY_FILES = { flair: null, t1ce: null, t2: null };
+const IDLE = { phase: 'idle', loaded: 0, total: 0 };
 
-const MODALITIES = [
-  { key: 'flair', label: 'FLAIR', desc: 'Fluid Attenuated Inversion Recovery' },
-  { key: 't1ce', label: 'T1CE',  desc: 'T1 Contrast Enhanced' },
-  { key: 't2',   label: 'T2',    desc: 'T2 Weighted' },
-];
-
-/* ─────────────────────────────────────────────────────────────
-   Upload Page
-───────────────────────────────────────────────────────────── */
-function UploadPage({ onResult }) {
-  const [online, setOnline]   = useState(null);
-  const [files,  setFiles]    = useState({ flair: null, t1ce: null, t2: null });
-  const [error,  setError]    = useState(null);
-  const [loading, setLoading] = useState(false);
-  const inputRefs = { flair: useRef(), t1ce: useRef(), t2: useRef() };
-
-  // Poll health
-  useEffect(() => {
-    const check = async () => {
-      try {
-        const r = await fetch(`${BACKEND}/health`);
-        const d = await r.json();
-        setOnline(r.ok && d.model_loaded && d.training_stats_loaded);
-      } catch { setOnline(false); }
-    };
-    check();
-    const iv = setInterval(check, 6000);
-    return () => clearInterval(iv);
-  }, []);
-
-  const allFilled = files.flair && files.t1ce && files.t2;
-
-  const handleFile = (key, e) => {
-    const f = e.target.files[0] || null;
-    setFiles(p => ({ ...p, [key]: f }));
-    setError(null);
+function restoredResult(record) {
+  return {
+    status: 'success',
+    slice_index: record.sliceIndex,
+    num_slices: record.numSlices,
+    verdict: record.verdict,
+    reliability_score: record.reliabilityScore,
+    images: { mri: null, segmentation_overlay: null, uncertainty_heatmap: null },
+    reliability_evidence_layer: null,
+    disclaimer: 'Restored from session history: scores only, no images.',
   };
-
-  const handleAnalyze = async () => {
-    if (!allFilled) { setError('Please select all three MRI modalities.'); return; }
-    const ext = f => f.name.endsWith('.nii') || f.name.endsWith('.nii.gz');
-    for (const { key } of MODALITIES) {
-      if (!ext(files[key])) {
-        setError(`${key.toUpperCase()} must be a .nii or .nii.gz file.`);
-        return;
-      }
-    }
-    setError(null);
-    setLoading(true);
-    const fd = new FormData();
-    for (const { key } of MODALITIES) fd.append(key, files[key]);
-    try {
-      const r = await fetch(`${BACKEND}/predict`, { method: 'POST', body: fd });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || 'Inference failed.');
-      onResult(d);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="upload-page">
-      {/* ── Nav ── */}
-      <nav className="page-nav">
-        <div className="brand-mark">
-          <span className="brand-name">TumorGuard AI</span>
-          <span className="brand-sub">Uncertainty-Aware Brain Tumor Segmentation</span>
-        </div>
-        <div className={`status-pill ${online ? 'online' : 'offline'}`}>
-          <span className="dot" />
-          {online === null ? 'Connecting…' : online ? 'AI Engine Online' : 'AI Engine Offline'}
-        </div>
-      </nav>
-
-      {/* ── Hero ── */}
-      <section className="hero">
-
-        <h1 className="hero-title">
-          See the segmentation.<br />
-          Know when the AI is uncertain.
-        </h1>
-        <p className="hero-sub">
-          AI-assisted MRI segmentation with uncertainty quantification and familiarity analysis.
-        </p>
-
-        {/* Glass upload panel */}
-        <div className="upload-panel">
-          {error && <div className="upload-error">⚠ {error}</div>}
-
-          <div className="upload-row">
-            {MODALITIES.map(({ key, label, desc }) => (
-              <label key={key} className={`upload-slot ${files[key] ? 'filled' : ''}`}>
-                <input
-                  ref={inputRefs[key]}
-                  type="file"
-                  accept=".nii,.nii.gz"
-                  onChange={e => handleFile(key, e)}
-                />
-                <span className="slot-label">{label}</span>
-                <span className="slot-icon">{files[key] ? '✓' : '⬆'}</span>
-                <span className={`slot-filename ${files[key] ? 'ready' : ''}`}>
-                  {files[key] ? files[key].name : desc}
-                </span>
-              </label>
-            ))}
-          </div>
-
-          <button
-            className="btn-analyze"
-            onClick={handleAnalyze}
-            disabled={!allFilled || !online || loading}
-          >
-            {loading ? 'Analyzing MRI…' : 'Analyze MRI →'}
-          </button>
-
-          <p className="upload-hint">Supports NIfTI (.nii / .nii.gz)</p>
-        </div>
-      </section>
-
-      {/* Loading overlay */}
-      {loading && (
-        <div className="loading-overlay">
-          <div className="spinner-ring" />
-          <p className="loading-label">Analyzing MRI Study…</p>
-          <span className="loading-sub">Running MC Dropout segmentation &amp; reliability analysis</span>
-        </div>
-      )}
-    </div>
-  );
 }
 
-/* ─────────────────────────────────────────────────────────────
-   Results Page
-───────────────────────────────────────────────────────────── */
-function ResultsPage({ result, onReset }) {
-  const [online, setOnline] = useState(true);
-
-  useEffect(() => {
-    const check = async () => {
-      try {
-        const r = await fetch(`${BACKEND}/health`);
-        const d = await r.json();
-        setOnline(r.ok && d.model_loaded && d.training_stats_loaded);
-      } catch { setOnline(false); }
-    };
-    check();
-    const iv = setInterval(check, 6000);
-    return () => clearInterval(iv);
-  }, []);
-
-  const vc = verdictClass(result.verdict);
-
-  const metrics = [
-    { label: 'Selected Slice',     value: result.slice_index },
-    { label: 'Familiarity',        value: result.familiarity_score?.toFixed(4) },
-    { label: 'Predictive Entropy', value: result.predictive_entropy?.toFixed(4) },
-    { label: 'Reliability Score',  value: result.reliability_score?.toFixed(4) },
-  ];
-
-  const flowSteps = [
-    { icon: <Brain size={24} strokeWidth={1.5} />, label: 'MRI' },
-    { icon: <Scissors size={24} strokeWidth={1.5} />, label: 'Segmentation' },
-    { icon: <Dices size={24} strokeWidth={1.5} />, label: 'MC Dropout' },
-    { icon: <Layers size={24} strokeWidth={1.5} />, label: 'Familiarity' },
-    { icon: <ShieldCheck size={24} strokeWidth={1.5} />, label: 'Reliability' },
-  ];
-
-  return (
-    <div className="results-page">
-      <div className="results-inner">
-        {/* ── Nav ── */}
-        <nav className="results-nav">
-          <div className="results-brand">
-            <span className="r-name">TumorGuard AI</span>
-            <span className="r-sub">AI Reliability Analysis</span>
-          </div>
-          <div className="nav-right">
-            <div className={`status-pill ${online ? 'online' : 'offline'}`}>
-              <span className="dot" />
-              {online ? 'AI Engine Online' : 'AI Engine Offline'}
-            </div>
-            <button className="btn-new" onClick={onReset}>New Analysis</button>
-          </div>
-        </nav>
-
-        {/* ── Verdict ── */}
-        <div className={`verdict-section ${vc}`}>
-          <div className="verdict-content">
-            <p className="verdict-eyebrow">AI Segmentation Reliability</p>
-            <div className="verdict-value">{verdictLabel(result.verdict)}</div>
-            {!isKnownVerdict(result.verdict) && (
-              <p className="verdict-caption">The server returned an unrecognized or missing verdict, so this result is flagged for manual review.</p>
-            )}
-            <p className="verdict-caption">
-              Reliability combines two signals: how familiar the scan is to the training distribution and how consistent the model's predictions are across stochastic inference passes.
-            </p>
-            <div className="verdict-equation">
-              <span className="eq-term">Model Familiarity</span>
-              <span className="eq-op">+</span>
-              <span className="eq-term">Prediction Uncertainty</span>
-              <span className="eq-op">→</span>
-              <span className="eq-result">AI Segmentation Reliability</span>
-            </div>
-          </div>
-          <div className="verdict-score-badge">
-            <div className="score-number">{result.reliability_score?.toFixed(2)}</div>
-            <div className="score-label">Score</div>
-          </div>
-        </div>
-
-        {/* ── Metrics ── */}
-        <div className="metrics-strip-container">
-          <div className="metrics-strip">
-            {metrics.map(m => (
-              <div key={m.label} className="metric-cell">
-                <span className="mc-value">{m.value}</span>
-                <span className="mc-label">{m.label}</span>
-              </div>
-            ))}
-          </div>
-          <div className="metrics-secondary">
-            <span className="mc-label">MC Dropout Uncertainty</span>
-            <span className="mc-value-small">{result.uncertainty_score?.toFixed(6)}</span>
-          </div>
-        </div>
-
-        {/* ── Visualizations ── */}
-        <div className="viz-section">
-          <div className="section-header">
-            <span className="section-eyebrow">MRI Analysis</span>
-            <span className="section-meta">Selected slice · {result.slice_index}</span>
-            <div className="section-divider" />
-          </div>
-          <div className="viz-grid">
-            <div className="viz-card">
-              <div className="viz-header">FLAIR MRI</div>
-              <div className="viz-image-wrap">
-                <img src={result.images.mri} alt="FLAIR MRI slice" />
-              </div>
-            </div>
-            <div className="viz-card">
-              <div className="viz-header">AI Segmentation</div>
-              <div className="viz-image-wrap">
-                <img src={result.images.segmentation_overlay} alt="AI segmentation overlay" />
-              </div>
-            </div>
-            <div className="viz-card">
-              <div className="viz-header">Uncertainty</div>
-              <div className="viz-image-wrap">
-                <img src={result.images.uncertainty_heatmap} alt="MC Dropout uncertainty map" />
-              </div>
-              <p className="viz-caption">AI uncertainty visualization — not a biological heat map.</p>
-            </div>
-          </div>
-        </div>
-
-        {/* ── How it works ── */}
-        <div className="how-section">
-          <div className="section-header">
-            <span className="section-eyebrow">How It Works</span>
-            <div className="section-divider" />
-          </div>
-          <div className="how-flow">
-            {flowSteps.map((s, i) => (
-              <>
-                <div key={s.label} className="flow-step">
-                  <div className="flow-bubble">{s.icon}</div>
-                  <div className="flow-label">{s.label}</div>
-                </div>
-                {i < flowSteps.length - 1 && (
-                  <span key={`arrow-${i}`} className="flow-arrow">→</span>
-                )}
-              </>
-            ))}
-          </div>
-          <p className="how-desc">
-            TumorGuard evaluates whether the segmentation result is sufficiently reliable based on
-            model uncertainty and similarity to the training distribution.
-          </p>
-        </div>
-
-        {/* ── Disclaimer ── */}
-        <div className="disclaimer">
-          <p className="disclaimer-title">⚠ Medical &amp; Research Disclaimer</p>
-          <p className="disclaimer-text">
-            {result.disclaimer ||
-              'This is a research prototype for AI segmentation reliability visualization. It does NOT diagnose cancer. It does NOT replace radiologist review. The verdict describes model reliability, not patient health status.'}
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ─────────────────────────────────────────────────────────────
-   Root
-───────────────────────────────────────────────────────────── */
 export default function App() {
+  const [route, navigate] = useRoute();
+  const [online, setOnline] = useState(null);
+  const [maxMb, setMaxMb] = useState(DEFAULT_MAX_UPLOAD_MB);
+  const [files, setFiles] = useState(EMPTY_FILES);
+  const [inspections, setInspections] = useState({});
+  const [progress, setProgress] = useState(IDLE);
+  const [analysisError, setAnalysisError] = useState(null);
+  const [uploadError, setUploadError] = useState(null);
   const [result, setResult] = useState(null);
-  return result
-    ? <ResultsPage result={result} onReset={() => setResult(null)} />
-    : <UploadPage  onResult={setResult} />;
+  const [caseId, setCaseId] = useState(null);
+  const [liveCaseId, setLiveCaseId] = useState(null);
+  const [reslicing, setReslicing] = useState(false);
+  const [resliceError, setResliceError] = useState(null);
+  const [records, setRecords] = useState(() => loadStored());
+  const busyRef = useRef(false);
+  const abortRef = useRef(null);
+  const inspectToken = useRef({});
+
+  // Real server health (also supplies the upload limit).
+  useEffect(() => {
+    let alive = true;
+    const tick = async () => {
+      const h = await checkHealth();
+      if (!alive) return;
+      setOnline(h.online);
+      if (h.limits && Number.isFinite(h.limits.max_upload_mb)) setMaxMb(h.limits.max_upload_mb);
+    };
+    tick();
+    const id = setInterval(tick, 6000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+
+  useEffect(() => { saveStored(records); }, [records]);
+
+  const validation = useMemo(() => combineValidation(files, inspections, maxMb), [files, inspections, maxMb]);
+
+  const onFile = useCallback(async (key, file) => {
+    setUploadError(null);
+    setFiles((f) => ({ ...f, [key]: file }));
+    setInspections((i) => { const n = { ...i }; delete n[key]; return n; });
+    const token = {};
+    inspectToken.current[key] = token;
+    const ins = await inspectFile(file);
+    if (inspectToken.current[key] === token) setInspections((i) => ({ ...i, [key]: ins }));
+  }, []);
+
+  const onRemove = useCallback((key) => {
+    inspectToken.current[key] = null;
+    setFiles((f) => ({ ...f, [key]: null }));
+    setInspections((i) => { const n = { ...i }; delete n[key]; return n; });
+  }, []);
+
+  const onClear = useCallback(() => {
+    inspectToken.current = {};
+    setFiles(EMPTY_FILES);
+    setInspections({});
+    setUploadError(null);
+  }, []);
+
+  const run = useCallback(async (sliceIndex, fresh) => {
+    if (busyRef.current) return; // prevent duplicate submissions
+    busyRef.current = true;
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    const id = fresh ? newCaseId() : liveCaseId;
+    if (fresh) {
+      setAnalysisError(null);
+      setUploadError(null);
+      setProgress({ phase: 'uploading', loaded: 0, total: 0 });
+      navigate('analysis');
+    } else {
+      setReslicing(true);
+      setResliceError(null);
+    }
+    try {
+      const res = await predict({
+        files,
+        sliceIndex,
+        signal: ctrl.signal,
+        onUploadProgress: (p) => { if (fresh) setProgress({ phase: 'uploading', ...p }); },
+        onUploadComplete: () => { if (fresh) setProgress((p) => ({ ...p, phase: 'processing' })); },
+      });
+      setResult(res);
+      if (fresh) {
+        setCaseId(id);
+        setLiveCaseId(id);
+        setRecords((r) => [makeRecord(id, res), ...r]);
+      } else {
+        setRecords((r) => r.map((x) => (x.id === id ? makeRecord(id, res, new Date(x.createdAt)) : x)));
+      }
+      setProgress(IDLE);
+      if (fresh) navigate('results');
+    } catch (e) {
+      setProgress(IDLE);
+      if (e.code === 'ABORTED') {
+        if (fresh) navigate('upload');
+      } else if (fresh) {
+        setAnalysisError(e.message);
+      } else {
+        setResliceError(e.message);
+      }
+    } finally {
+      busyRef.current = false;
+      abortRef.current = null;
+      setReslicing(false);
+    }
+  }, [files, liveCaseId, navigate]);
+
+  const onStart = useCallback(() => { run(null, true); }, [run]);
+  const onCancel = useCallback(() => { abortRef.current?.abort(); }, []);
+  const onSlice = useCallback((i) => { run(i, false); }, [run]);
+  const onAuto = useCallback(() => { run(null, false); }, [run]);
+
+  const onNew = useCallback(() => { onClear(); navigate('upload'); }, [onClear, navigate]);
+
+  const onView = useCallback((id) => {
+    const rec = records.find((r) => r.id === id);
+    if (!rec) return;
+    setResult(rec.result || restoredResult(rec));
+    setCaseId(rec.id);
+    setResliceError(null);
+    navigate('results');
+  }, [records, navigate]);
+
+  const onDelete = useCallback((id) => { setRecords((r) => r.filter((x) => x.id !== id)); }, []);
+  const onClearHistory = useCallback(() => { setRecords([]); }, []);
+
+  const filesLoaded = Boolean(files.flair && files.t1ce && files.t2);
+  const isLive = caseId !== null && caseId === liveCaseId;
+  const canReslice = isLive && filesLoaded && online !== false;
+  const resliceReason = !isLive ? 'the original files are not loaded for this case'
+    : !filesLoaded ? 'the original files were cleared' : online === false ? 'the server is offline' : '';
+
+  const busy = progress.phase !== 'idle';
+  let view = route;
+  if (route === 'analysis' && !busy && !analysisError) view = 'upload';
+
+  return (
+    <>
+      <a className="tg-skip" href="#main">Skip to content</a>
+      <Nav route={route} navigate={navigate} online={online} />
+      {view === 'home' && <Landing navigate={navigate} />}
+      {view === 'upload' && (
+        <Upload files={files} inspections={inspections} validation={validation} maxMb={maxMb} online={online}
+          busy={busy} error={uploadError} onFile={onFile} onRemove={onRemove} onClear={onClear} onStart={onStart} />
+      )}
+      {view === 'analysis' && (
+        <Analysis progress={progress} error={analysisError} onCancel={onCancel}
+          onRetry={() => { setAnalysisError(null); run(null, true); }}
+          onBack={() => { setAnalysisError(null); navigate('upload'); }} />
+      )}
+      {view === 'results' && (
+        <Results result={result} caseId={caseId} canReslice={canReslice} resliceReason={resliceReason}
+          reslicing={reslicing} resliceError={resliceError} onSlice={onSlice} onAuto={onAuto} onNew={onNew}
+          onReportHtml={() => downloadText(`tumorguard_${caseId}.html`, buildReportHTML(result, caseId), 'text/html')}
+          onReportJson={() => downloadText(`tumorguard_${caseId}.json`, `${JSON.stringify(buildReportJSON(result, caseId), null, 2)}\n`, 'application/json')}
+          navigate={navigate} />
+      )}
+      {view === 'evidence' && <Evidence result={result} caseId={caseId} navigate={navigate} />}
+      {view === 'history' && <History records={records} onView={onView} onDelete={onDelete} onClear={onClearHistory} navigate={navigate} />}
+      {view === 'research' && <Research />}
+      {view === 'about' && <About navigate={navigate} />}
+      <footer className="tg-footer">
+        <p>TumorGuard AI is a research prototype. Not clinically validated; not for diagnosis or treatment decisions.</p>
+      </footer>
+    </>
+  );
 }

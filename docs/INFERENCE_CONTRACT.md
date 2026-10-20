@@ -8,7 +8,7 @@ Verified by reading `tumorguard_core.py` and `server.py` at the commit on this b
 |---|---|
 | Modalities and order | `REQUIRED_MODALITIES = ["flair", "t1ce", "t2"]` -> channels 0, 1, 2 (`load_and_preprocess_mri`) |
 | Upload fields | `/predict` multipart fields `flair`, `t1ce`, `t2`; a `seg` field is rejected with HTTP 400 |
-| File names | must end with `.nii` or `.nii.gz` (case-sensitive; `.NII` is rejected). The check is on the name only, not file content |
+| File names | must end with `.nii` or `.nii.gz` (case-insensitive). The name check is not a content check; content is validated separately (see below) |
 | Volume layout | arrays read with `nibabel` `get_fdata()` (float64), NaN -> 0. The third array axis is treated as the axial slice axis. No re-orientation, spacing or affine handling |
 
 ## Preprocessing (per modality, 2D)
@@ -49,23 +49,32 @@ Consequences: the metrics in `docs/BASELINE.md` describe the deterministic path,
 
 ## Output
 
-`/predict` returns JSON: `status`, `slice_index`, `familiarity_score`, `uncertainty_score`, `predictive_entropy`, `max_probability_difference`, `reliability_score`, `verdict`, `images` (`mri`, `segmentation_overlay`, `uncertainty_heatmap` as base64 PNG data URIs) and `disclaimer`.
+`/predict` returns JSON. Original fields (unchanged): `status`, `slice_index`, `familiarity_score`, `uncertainty_score`, `predictive_entropy`, `max_probability_difference`, `reliability_score`, `verdict`, `images` (`mri`, `segmentation_overlay`, `uncertainty_heatmap` as base64 PNG data URIs) and `disclaimer`.
 
-**Alignment:** the mask, overlay and heatmap are in the 128x128 resized-slice space. They are not mapped back to the original in-plane resolution. Arrays are plotted as stored (no transpose or flip), so display orientation relative to a radiological view is unverified.
+Fields added in this release (additive): `slice_selection_mode` (`automatic` | `explicit`), `num_slices`, `mask_pixels`, `prediction_method` (`mc_dropout_mean`, 10 passes, threshold 0.5, operator `>`), `reliability_breakdown` (per-signal confidence, weight, contribution), `input_validation` (shape, slices, affine consistency, non-finite fraction, warnings), `image_info` (width, height, orientation, heatmap scale) and `reliability_evidence_layer` (see `reliability_evidence.py`). The optional form field `slice_index` selects an explicit slice (0 to num_slices-1). `/health` additionally returns `limits.max_upload_mb`.
+
+**Rendering (`rendering.py`):** all three panels use one display transform (`np.rot90`, 90 degrees counter-clockwise) and are written at the native 128 x 128 model resolution with no resampling or smoothing. FLAIR is windowed to the 1st-99th percentile of non-zero pixels (background black). The overlay is the binary mask in red at 50% alpha. The heatmap is the per-pixel variance scaled linearly from 0 to this slice's maximum (returned as `image_info.heatmap_max_variance`) with the `inferno` colour map, alpha proportional to the scaled value. Left/right convention assumes standard BraTS orientation and is not verified from the affine.
+
+**Alignment:** the mask, overlay and heatmap are in the 128 x 128 resized-slice space. They are not mapped back to the original in-plane resolution.
 
 ## Empty mask
 
-If no pixel exceeds 0.5 the response is still HTTP 200 with an all-zero overlay; there is no explicit "no tumour predicted" flag or special reliability handling. Dice-style metrics treat empty-vs-empty as perfect in `calculate_dice_score` (returns 1.0) but `evaluate_phase9.py` uses `smooth=1e-6` (also near 1.0 for empty-vs-empty). 19 of 398 historical validation slices were predicted empty.
+If no pixel exceeds 0.5 the response is still HTTP 200 with an all-zero overlay and `mask_pixels = 0`. The evidence layer treats this as a review trigger. 19 of 398 historical validation slices were predicted empty.
 
-## Invalid input handling
+## Input validation (`input_validation.py`, server side)
 
 | Case | Behaviour |
 |---|---|
-| Missing modality | HTTP 400 |
-| `seg` supplied | HTTP 400 |
-| Empty file name / wrong extension | HTTP 400 |
-| Unreadable FLAIR | slice selection falls back to 75; preprocessing then fails -> HTTP 400 |
-| Non-3D, mismatched shapes across modalities, or very large files | **not validated** (shapes are resized independently; no `MAX_CONTENT_LENGTH`) (D-17) |
-| Unexpected error | HTTP 500 with `str(exception)` in the body and a traceback on stderr; exception text may include local paths (D-18) |
+| Missing modality / `seg` supplied / empty name / wrong extension (case-insensitive) | HTTP 400 with `error_code` (`MISSING_MODALITY`, `SEG_NOT_ALLOWED`, `EMPTY_FILE`, `INVALID_FILE_TYPE`) |
+| Unreadable NIfTI, not 3D, in-plane < 32 px or any axis > 1024 | HTTP 400 (`INVALID_NIFTI`, `INVALID_SHAPE`) |
+| Different shapes or affines across modalities | HTTP 400 `SPATIAL_MISMATCH` |
+| All-zero volume; more than 0.1% non-finite voxels | HTTP 400 `EMPTY_VOLUME`, `NON_FINITE_DATA` |
+| Invalid `slice_index` | HTTP 400 `INVALID_SLICE_INDEX` |
+| Upload larger than `TUMORGUARD_MAX_UPLOAD_MB` (default 512 MB total) | HTTP 413 `UPLOAD_TOO_LARGE` |
+| Non-finite model output | HTTP 422 `NON_FINITE_OUTPUT` |
+| Unexpected error | HTTP 500 `INTERNAL_ERROR` with a generic message; details only in the server log |
+| Third axis not smaller than the in-plane axes, or strongly non-square in-plane | accepted, with `input_validation.warnings` (possible non-axial storage; resizing would distort the image) |
 
-CORS is enabled for all origins (`CORS(app)`); the server binds to `127.0.0.1:5000`.
+Error bodies never contain file-system paths, exception text or tracebacks (tested). Client file names are never used on disk. CORS is enabled for all origins (`CORS(app)`); the server binds to `127.0.0.1:5000`.
+
+Not validated: voxel spacing, orientation labels in the affine, intensity ranges, and whether the files are actually FLAIR/T1CE/T2 in that order.

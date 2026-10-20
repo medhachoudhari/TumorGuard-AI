@@ -1,0 +1,14 @@
+{
+  "_provenance": "Copy of selected fields from models/phase9_evaluation.json (historical, reported; NOT independently reproduced). Validation patients 031-040 were also used for model selection, so this is not an independent test set. Kept in sync by tests/test_rendering_and_validation.py.",
+  "source_artifact": "models/phase9_evaluation.json",
+  "metrics": {
+    "validation_samples": 398,
+    "mean_dice": 0.7863156015536554,
+    "median_dice": 0.8761556148529053,
+    "mean_iou": 0.6961169813451865,
+    "mean_precision": 0.836374887998356,
+    "mean_recall": 0.8145618991278899,
+    "zero_prediction_slices": 19,
+    "checkpoint_epoch": 20
+  }
+}

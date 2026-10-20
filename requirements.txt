@@ -8,3 +8,4 @@ matplotlib
 tqdm
 flask
 flask-cors
+pillow
