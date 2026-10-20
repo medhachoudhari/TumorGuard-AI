@@ -428,6 +428,14 @@ VERDICT_LOW = "LOW RELIABILITY"
 VERDICT_MANUAL = "MANUAL REVIEW REQUIRED"
 VERDICTS = (VERDICT_HIGH, VERDICT_MODERATE, VERDICT_LOW, VERDICT_MANUAL)
 
+# Backward-compatible aliases
+VERDICT_HIGH_RELIABILITY = VERDICT_HIGH
+VERDICT_MODERATE_RELIABILITY = VERDICT_MODERATE
+VERDICT_LOW_RELIABILITY = VERDICT_LOW
+VERDICT_MANUAL_REVIEW = VERDICT_MANUAL
+SUPPORTED_VERDICTS = VERDICTS
+
+
 
 def verdict_from_score(reliability_score):
     """Map a reliability score to a verdict. Thresholds: 0.70 / 0.50 / 0.30 (inclusive lower bounds)."""
@@ -567,13 +575,23 @@ def extract_state_dict(payload):
     return state_dict, metadata
 
 
-def load_model_checkpoint(model, path, map_location="cpu", strict=True):
+def load_model_checkpoint(model, path, map_location="cpu", device=None, strict=True):
     """
     Load a checkpoint into `model` and return its metadata dict (epoch, val_loss...).
 
     With strict=True (default) any missing key, unexpected key, shape mismatch or
     non-finite weight raises CheckpointError and the model is left unmodified.
+
+    Parameters:
+      model: PyTorch module
+      path: checkpoint file path
+      map_location: device mapping (default "cpu")
+      device: backward-compatible alias for map_location
+      strict: boolean (default True)
     """
+    if device is not None:
+        map_location = device
+
     name = os.path.basename(str(path))
     payload = load_checkpoint_payload(path, map_location=map_location)
     state_dict, metadata = extract_state_dict(payload)

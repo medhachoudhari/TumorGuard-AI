@@ -163,3 +163,25 @@ def test_repository_checkpoint_loads_strictly():
     assert isinstance(meta, dict)
     out = model.eval()(torch.zeros(1, 3, 128, 128))
     assert out.shape == (1, 1, 128, 128)
+
+
+def test_repository_dev_checkpoint_loads_strictly():
+    """Verify that models/tumorguard_dev.pth (raw state dict format) also loads strictly."""
+    import os
+    path = os.path.join(os.path.dirname(core.__file__), "models", "tumorguard_dev.pth")
+    if not os.path.exists(path):
+        pytest.skip("tumorguard_dev.pth not present")
+    model = core.TumorGuardUNet()
+    meta = core.load_model_checkpoint(model, path, strict=True)
+    assert meta == {}
+    out = model.eval()(torch.zeros(1, 3, 128, 128))
+    assert out.shape == (1, 1, 128, 128)
+
+
+def test_device_keyword_alias(reference_model, tmp_path):
+    """Verify that passing device='cpu' functions as backward-compatible alias for map_location."""
+    path = save(reference_model.state_dict(), tmp_path)
+    target = fresh_model()
+    meta = core.load_model_checkpoint(target, path, device="cpu")
+    assert same_weights(target, reference_model)
+    assert meta == {}

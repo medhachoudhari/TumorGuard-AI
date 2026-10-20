@@ -15,6 +15,15 @@ def test_verdict_strings_are_canonical():
     )
 
 
+def test_verdict_aliases():
+    assert core.SUPPORTED_VERDICTS == core.VERDICTS
+    assert core.VERDICT_HIGH_RELIABILITY == core.VERDICT_HIGH
+    assert core.VERDICT_MODERATE_RELIABILITY == core.VERDICT_MODERATE
+    assert core.VERDICT_LOW_RELIABILITY == core.VERDICT_LOW
+    assert core.VERDICT_MANUAL_REVIEW == core.VERDICT_MANUAL
+
+
+
 @pytest.mark.parametrize("score,expected", [
     (1.0, "HIGH RELIABILITY"), (0.70, "HIGH RELIABILITY"),
     (0.6999999, "MODERATE RELIABILITY"), (0.50, "MODERATE RELIABILITY"),
