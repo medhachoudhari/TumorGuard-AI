@@ -17,11 +17,31 @@ import matplotlib
 matplotlib.use('Agg') # Headless backend
 import matplotlib.pyplot as plt
 from flask import Flask, request, jsonify
+from werkzeug.exceptions import HTTPException
+import logging
 from flask_cors import CORS
 import tumorguard_core
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logger = logging.getLogger("tumorguard")
+
+DEFAULT_MAX_CONTENT_LENGTH = 150 * 1024 * 1024  # 150 MB
+
 app = Flask(__name__)
 CORS(app)
+app.config['MAX_CONTENT_LENGTH'] = int(
+    os.environ.get('TUMORGUARD_MAX_CONTENT_LENGTH', DEFAULT_MAX_CONTENT_LENGTH)
+)
+
+
+@app.errorhandler(413)
+def request_entity_too_large(error):
+    max_mb = app.config.get('MAX_CONTENT_LENGTH', DEFAULT_MAX_CONTENT_LENGTH) // (1024 * 1024)
+    logger.warning("Upload rejected: payload exceeds configured maximum size of %d MB", max_mb)
+    return jsonify({
+        "status": "error",
+        "error": f"Upload payload exceeds maximum allowed size ({max_mb} MB)."
+    }), 413
 
 # ==============================================================================
 # STARTUP INITIALIZATION
@@ -115,10 +135,16 @@ def predict():
     try:
         # 1. Validate Uploaded Files
         if 'flair' not in request.files or 't1ce' not in request.files or 't2' not in request.files:
-            return jsonify({"error": "Missing required modalities. Expected exactly: 'flair', 't1ce', 't2'."}), 400
+            return jsonify({
+                "status": "error",
+                "error": "Missing required modalities. Expected exactly: 'flair', 't1ce', 't2'."
+            }), 400
         
         if 'seg' in request.files:
-            return jsonify({"error": "Segmentation masks ('seg') are not allowed for live inference."}), 400
+            return jsonify({
+                "status": "error",
+                "error": "Segmentation masks ('seg') are not allowed for live inference."
+            }), 400
 
         files = {
             'flair': request.files['flair'],
@@ -128,9 +154,15 @@ def predict():
 
         for name, f in files.items():
             if f.filename == '':
-                return jsonify({"error": f"Empty file submitted for '{name}'."}), 400
+                return jsonify({
+                    "status": "error",
+                    "error": f"Empty file submitted for '{name}'."
+                }), 400
             if not (f.filename.endswith('.nii') or f.filename.endswith('.nii.gz')):
-                return jsonify({"error": f"Invalid file type for '{name}'. Expected .nii or .nii.gz."}), 400
+                return jsonify({
+                    "status": "error",
+                    "error": f"Invalid file type for '{name}'. Expected .nii or .nii.gz."
+                }), 400
 
         # 2. Process in Temporary Directory
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -141,11 +173,31 @@ def predict():
                 f.save(path)
                 paths[name] = path
 
+            # 2b. Validate 3D NIfTI, shapes, voxel spacing, and affines
+            try:
+                tumorguard_core.validate_modality_volumes(paths)
+            except tumorguard_core.SpatialValidationError as sve:
+                logger.warning("Spatial validation rejected: %s", sve)
+                return jsonify({
+                    "status": "error",
+                    "error": str(sve)
+                }), 400
+            except Exception as e:
+                logger.warning("NIfTI validation failed: %s", e)
+                return jsonify({
+                    "status": "error",
+                    "error": "Uploaded scan files could not be validated as valid 3D NIfTI volumes."
+                }), 400
+
             # 3. Slice Selection (Inference only - no GT)
             try:
                 best_slice = tumorguard_core.select_inference_slice(paths['flair'])
             except Exception as e:
-                return jsonify({"error": f"Failed to read FLAIR scan for slice selection: {str(e)}"}), 400
+                logger.error("Slice selection error: %s", e, exc_info=True)
+                return jsonify({
+                    "status": "error",
+                    "error": "Failed to determine an informative slice from the FLAIR scan."
+                }), 400
 
             # 4. Preprocessing
             try:
@@ -153,7 +205,11 @@ def predict():
                     paths['flair'], paths['t1ce'], paths['t2'], slice_idx=best_slice
                 ).unsqueeze(0) # (1, 3, H, W)
             except Exception as e:
-                return jsonify({"error": f"Preprocessing failed: {str(e)}"}), 400
+                logger.error("Preprocessing error: %s", e, exc_info=True)
+                return jsonify({
+                    "status": "error",
+                    "error": "Failed to preprocess MRI scan slices for model inference."
+                }), 400
 
             # 5. MC Dropout Inference
             mean_pred, var_map, unc_score, max_diff, entropy = \
@@ -196,10 +252,14 @@ def predict():
             
             return jsonify(response)
 
+    except HTTPException:
+        raise
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": f"Internal server error during inference: {str(e)}"}), 500
+        logger.error("Unhandled internal server error during inference: %s", e, exc_info=True)
+        return jsonify({
+            "status": "error",
+            "error": "An internal error occurred during inference. Please consult server logs for diagnostic details."
+        }), 500
 
 if __name__ == '__main__':
     # Run locally

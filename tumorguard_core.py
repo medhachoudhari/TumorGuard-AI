@@ -13,6 +13,121 @@ REQUIRED_MODALITIES = ["flair", "t1ce", "t2"]
 IMG_SIZE = 128
 
 
+class SpatialValidationError(ValueError):
+    """Raised when uploaded MRI scans fail spatial, dimensional, or orientation validation."""
+    pass
+
+
+def validate_modality_volumes(paths, required_modalities=REQUIRED_MODALITIES, tolerance=1e-3):
+    """
+    Validates that the given MRI modalities exist, are valid 3D NIfTI files,
+    share identical matrix dimensions, and have compatible voxel spacing and spatial affines.
+
+    Parameters:
+        paths: dict mapping modality name to file path on disk.
+        required_modalities: iterable of modality names (default ('flair', 't1ce', 't2')).
+        tolerance: numerical tolerance for comparing voxel spacing and affines.
+
+    Returns:
+        dict mapping modality name to nibabel Nifti1Image instances.
+
+    Raises:
+        SpatialValidationError: if any scan is invalid, corrupted, non-3D,
+            contains non-finite voxels or affines, or if modalities are spatially incompatible.
+    """
+    if not isinstance(paths, dict):
+        raise SpatialValidationError("Expected paths dictionary mapping modality names to file paths.")
+
+    for mod in required_modalities:
+        if mod not in paths:
+            raise SpatialValidationError(f"Missing required modality: '{mod}'.")
+        p = paths[mod]
+        if not p or not os.path.exists(str(p)):
+            raise SpatialValidationError(f"File not found for modality '{mod}': {p}")
+
+    images = {}
+    for mod in required_modalities:
+        p = paths[mod]
+        try:
+            img = nib.load(str(p))
+            _ = img.header
+        except Exception as e:
+            raise SpatialValidationError(f"Invalid or corrupted NIfTI file for '{mod}': unable to parse header.") from e
+
+        if img.ndim != 3:
+            raise SpatialValidationError(
+                f"Modality '{mod}' must be a 3D volume, but got {img.ndim}D with shape {img.shape}."
+            )
+
+        if any(dim <= 0 for dim in img.shape):
+            raise SpatialValidationError(
+                f"Modality '{mod}' has invalid dimension size: {img.shape}."
+            )
+
+        affine = img.affine
+        if affine is None or not np.all(np.isfinite(affine)):
+            raise SpatialValidationError(
+                f"Modality '{mod}' contains non-finite values in its spatial affine matrix."
+            )
+
+        zooms = img.header.get_zooms()[:3]
+        if not np.all(np.isfinite(zooms)) or any(float(z) <= 0 for z in zooms):
+            raise SpatialValidationError(
+                f"Modality '{mod}' contains invalid voxel spacing: {zooms}."
+            )
+
+        try:
+            data = img.get_fdata()
+        except Exception as e:
+            raise SpatialValidationError(
+                f"Failed to read image data for '{mod}': file may be truncated or corrupted ({e})."
+            ) from e
+
+        if not np.all(np.isfinite(data)):
+            raise SpatialValidationError(
+                f"Modality '{mod}' contains non-finite (NaN or Inf) voxel data."
+            )
+
+        if np.all(data == 0):
+            raise SpatialValidationError(
+                f"Modality '{mod}' contains only zero or empty voxel values."
+            )
+
+        images[mod] = img
+
+    # Cross-modality comparison against the reference modality (first in required_modalities)
+    ref_mod = required_modalities[0]
+    ref_img = images[ref_mod]
+    ref_shape = ref_img.shape
+    ref_zooms = ref_img.header.get_zooms()[:3]
+    ref_affine = ref_img.affine
+
+    for mod in required_modalities[1:]:
+        img = images[mod]
+        if img.shape != ref_shape:
+            raise SpatialValidationError(
+                f"Mismatched volume dimensions across modalities: '{ref_mod}' has shape {ref_shape}, "
+                f"but '{mod}' has shape {img.shape}. Scans must have identical spatial dimensions."
+            )
+
+        zooms = img.header.get_zooms()[:3]
+        if not np.allclose(ref_zooms, zooms, atol=tolerance, rtol=tolerance):
+            ref_z_str = [round(float(z), 4) for z in ref_zooms]
+            mod_z_str = [round(float(z), 4) for z in zooms]
+            raise SpatialValidationError(
+                f"Mismatched voxel spacing across modalities: '{ref_mod}' has spacing {ref_z_str}, "
+                f"but '{mod}' has spacing {mod_z_str}. Scans must have identical voxel spacing."
+            )
+
+        if not np.allclose(ref_affine, img.affine, atol=tolerance, rtol=tolerance):
+            raise SpatialValidationError(
+                f"Incompatible spatial affines across modalities between '{ref_mod}' and '{mod}'. "
+                f"Scans must be co-registered in the same anatomical space."
+            )
+
+    return images
+
+
 # ==============================================================================
 # 2. SLICE SELECTION STRATEGIES
 # ==============================================================================
